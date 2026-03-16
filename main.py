@@ -37,8 +37,17 @@ def extract_text(page: Page, xpath: str) -> str:
         logging.warning(f"Failed to extract text for xpath {xpath}: {e}")
     return ""
 
+def extract_place_name(page: Page) -> str:
+    try:
+        headings = [text.strip() for text in page.locator("h1").all_inner_texts() if text.strip()]
+        for heading in reversed(headings):
+            if heading.lower() not in {"resultados", "results"}:
+                return heading
+    except Exception as e:
+        logging.warning(f"Failed to extract place name: {e}")
+    return ""
+
 def extract_place(page: Page) -> Place:
-    name_xpath = '//h1[@role="heading"]'
     address_xpath = '//button[@data-item-id="address"]//div[contains(@class, "fontBodyMedium")]'
     website_xpath = '//a[@data-item-id="authority"]//div[contains(@class, "fontBodyMedium")]'
     phone_number_xpath = '//button[contains(@data-item-id, "phone:tel:")]//div[contains(@class, "fontBodyMedium")]'
@@ -46,7 +55,7 @@ def extract_place(page: Page) -> Place:
     place_type_xpath = 'button[jsaction*="pane.rating.category"]'
 
     place = Place()
-    place.name = extract_text(page, name_xpath)
+    place.name = extract_place_name(page)
     place.address = extract_text(page, address_xpath)
     place.website = extract_text(page, website_xpath)
     place.phone_number = extract_text(page, phone_number_xpath)
@@ -75,7 +84,7 @@ def extract_place(page: Page) -> Place:
             logging.warning(f"Failed to parse rating summary '{rating_label}': {e}")
 
     try:
-        main_panel_text = page.locator('div[role="main"]').inner_text().lower()
+        main_panel_text = page.locator('div[role="main"]').last.inner_text().lower()
         if any(k in main_panel_text for k in ["in-store shopping", "na loja", "loja física"]):
             place.store_shopping = "Yes"
         if any(k in main_panel_text for k in ["in-store pickup", "retirada", "pick up"]):
@@ -99,6 +108,7 @@ def scrape_places(search_for: str, total: int) -> List[Place]:
     setup_logging()
     places: List[Place] = []
     results_selector = 'a[href*="/maps/place"]'
+    search_input_selector = 'input[name="q"], input#searchboxinput, input[aria-label*="Search"], input[aria-label*="Pesquisar"]'
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=False,
@@ -108,8 +118,10 @@ def scrape_places(search_for: str, total: int) -> List[Place]:
         try:
             page.goto("https://www.google.com/maps/@32.9817464,70.1930781,3.67z?", timeout=60000)
             page.wait_for_timeout(1000)
-            page.locator('//input[@id="searchboxinput"]').fill(search_for)
-            page.keyboard.press("Enter")
+            page.wait_for_selector(search_input_selector, timeout=15000)
+            search_input = page.locator(search_input_selector).first
+            search_input.fill(search_for)
+            search_input.press("Enter")
 
             page.wait_for_selector(results_selector, timeout=15000)
             page.wait_for_timeout(2000)
@@ -139,12 +151,12 @@ def scrape_places(search_for: str, total: int) -> List[Place]:
                 previous_count = found
 
             listings = page.locator(results_selector).all()[:total]
-            listings = [listing.locator("xpath=..") for listing in listings]
             logging.info(f"Total Found: {len(listings)}")
             for idx, listing in enumerate(listings):
                 try:
+                    listing.scroll_into_view_if_needed()
                     listing.click()
-                    page.wait_for_selector('//h1[@role="heading"]', timeout=10000)
+                    page.wait_for_selector('button[data-item-id="address"], a[data-item-id="authority"], button[data-item-id^="phone:"]', timeout=10000)
                     time.sleep(1.5)  # Give time for details to load
                     place = extract_place(page)
                     if place.name:
