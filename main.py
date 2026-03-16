@@ -1,7 +1,7 @@
 import logging
 from typing import List, Optional
 from playwright.sync_api import sync_playwright, Page
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 import pandas as pd
 import argparse
 import time
@@ -170,11 +170,11 @@ def scrape_places(search_for: str, total: int) -> List[Place]:
     return places
 
 def save_places_to_csv(places: List[Place], output_path: str = "result.csv", append: bool = False):
-    df = pd.DataFrame([asdict(place) for place in places])
+    field_names = [field.name for field in fields(Place)]
+    df = pd.DataFrame([asdict(place) for place in places], columns=field_names)
     if not df.empty:
-        for column in df.columns:
-            if df[column].nunique() == 1:
-                df.drop(column, axis=1, inplace=True)
+        for column in ["name", "address", "website", "phone_number", "place_type", "opens_at", "introduction"]:
+            df[column] = df[column].fillna("").astype(str).str.replace(r"\s+", " ", regex=True).str.strip()
         file_exists = os.path.isfile(output_path)
         mode = "a" if append else "w"
         header = not (append and file_exists)
