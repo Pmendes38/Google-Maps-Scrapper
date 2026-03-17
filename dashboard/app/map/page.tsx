@@ -1,11 +1,19 @@
 import Link from "next/link";
 
 import { SchoolMap } from "@/components/SchoolMap";
-import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { getServerSupabaseClient } from "@/lib/supabase-server";
 import type { SchoolLead } from "@/lib/types";
 
 export default async function MapPage() {
-  const supabase = createServerSupabaseClient();
+  const { supabase, error: clientError } = getServerSupabaseClient();
+  if (!supabase) {
+    return (
+      <main className="mx-auto max-w-7xl px-6 py-10">
+        <h1 className="text-2xl font-semibold">Mapa de Leads</h1>
+        <p className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">Erro de configuracao do Supabase: {clientError}</p>
+      </main>
+    );
+  }
   const { data, error } = await supabase
     .from("school_leads")
     .select("*")

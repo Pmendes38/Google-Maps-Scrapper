@@ -2,11 +2,14 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { ScoreBadge } from "@/components/ScoreBadge";
-import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { getServerSupabaseClient } from "@/lib/supabase-server";
 import type { SchoolLead } from "@/lib/types";
 
 export default async function LeadDetailPage({ params }: { params: { id: string } }) {
-  const supabase = createServerSupabaseClient();
+  const { supabase } = getServerSupabaseClient();
+  if (!supabase) {
+    notFound();
+  }
   const { data, error } = await supabase.from("school_leads").select("*").eq("id", params.id).single();
 
   if (error || !data) {

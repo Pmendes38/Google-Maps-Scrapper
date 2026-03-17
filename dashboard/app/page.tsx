@@ -3,7 +3,7 @@ import Link from "next/link";
 import { FilterBar } from "@/components/FilterBar";
 import { LeadCard } from "@/components/LeadCard";
 import { StatsPanel } from "@/components/StatsPanel";
-import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { getServerSupabaseClient } from "@/lib/supabase-server";
 import type { SchoolLead } from "@/lib/types";
 
 type SearchValue = string | string[] | undefined;
@@ -20,7 +20,15 @@ export default async function Home({
 }: {
   searchParams: Record<string, SearchValue>;
 }) {
-  const supabase = createServerSupabaseClient();
+  const { supabase, error: clientError } = getServerSupabaseClient();
+  if (!supabase) {
+    return (
+      <main className="mx-auto max-w-7xl px-6 py-10">
+        <h1 className="text-2xl font-semibold">Wayzen Dashboard</h1>
+        <p className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">Erro de configuracao do Supabase: {clientError}</p>
+      </main>
+    );
+  }
 
   let query = supabase
     .from("school_leads")

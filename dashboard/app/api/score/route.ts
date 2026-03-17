@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { getServerSupabaseClient } from "@/lib/supabase-server";
 
 const SYSTEM_PROMPT = `Você é especialista em prospecção B2B educacional brasileiro.
 Analise leads de escolas e retorne um JSON com scores estruturados.
@@ -113,7 +113,13 @@ export async function POST(request: NextRequest) {
 
   // Persistir no Supabase se houver IDs de lead
   if (shouldPersist) {
-    const supabase = createServerSupabaseClient();
+    const { supabase } = getServerSupabaseClient();
+    if (!supabase) {
+      return NextResponse.json(
+        { error: "Supabase nao configurado para persistencia de scores" },
+        { status: 500 }
+      );
+    }
     for (const score of normalized) {
       if (!score.id) continue;
       try {

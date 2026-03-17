@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { getServerSupabaseClient } from "@/lib/supabase-server";
 
 export async function GET(request: NextRequest) {
-  const supabase = createServerSupabaseClient();
+  const { supabase, error: clientError } = getServerSupabaseClient();
+  if (!supabase) {
+    return NextResponse.json({ error: clientError }, { status: 500 });
+  }
   const params = request.nextUrl.searchParams;
 
   let query = supabase
@@ -36,7 +39,10 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const supabase = createServerSupabaseClient();
+  const { supabase, error: clientError } = getServerSupabaseClient();
+  if (!supabase) {
+    return NextResponse.json({ error: clientError }, { status: 500 });
+  }
   const body = (await request.json()) as Record<string, unknown>;
   const id = String(body.id ?? "");
 
