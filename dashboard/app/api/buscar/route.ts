@@ -3,26 +3,38 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSupabaseClient } from "@/lib/supabase-server";
 import type { ICPMatch, SchoolLead, SchoolSegment } from "@/lib/types";
 
-type OpenCnpjRow = {
+type IneqRow = {
+  co_entidade: string;
+  no_entidade: string | null;
+  cnpj: string | null;
+  tp_rede: number | null;
+  qt_mat_bas: number | null;
+  qt_mat_inf: number | null;
+  qt_mat_fund: number | null;
+  qt_mat_med: number | null;
+  nu_ideb_ai: number | null;
+  nu_ideb_af: number | null;
+  no_municipio: string | null;
+  sg_uf: string | null;
+};
+
+type BrasilApiCnpj = {
   cnpj?: string;
   razao_social?: string;
   nome_fantasia?: string;
+  cep?: string;
+  ddd_telefone_1?: string;
+  ddd_telefone_2?: string;
+  email?: string;
+  porte?: string;
+  capital_social?: string | number;
+  cnae_fiscal?: number | string;
+  cnae_fiscal_descricao?: string;
+  data_inicio_atividade?: string;
   municipio?: string;
   uf?: string;
-  cep?: string;
   logradouro?: string;
   bairro?: string;
-  ddd_telefone_1?: string;
-  telefone_1?: string;
-  telefone?: string;
-  email?: string;
-  data_inicio_atividade?: string;
-  capital_social?: number | string;
-  porte?: string;
-  cnae_fiscal?: string;
-  cnae_fiscal_descricao?: string;
-  situacao_cadastral?: string;
-  website?: string;
 };
 
 type CepResponse = {
@@ -42,21 +54,17 @@ function normalizeDigits(value: unknown): string {
   return String(value ?? "").replace(/\D/g, "");
 }
 
-function parseCapitalSocial(value: unknown): number {
+function parseNumber(value: unknown): number {
   const text = String(value ?? "").replace(/\./g, "").replace(",", ".");
-  const num = Number(text);
-  return Number.isFinite(num) ? num : 0;
+  const n = Number(text);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function yearsSince(dateText: unknown): number {
-  const parsed = new Date(String(dateText ?? ""));
-  if (Number.isNaN(parsed.getTime())) return 0;
-  const diffMs = Date.now() - parsed.getTime();
-  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24 * 365.25)));
-}
-
-function isEducationalCnae(cnae: string): boolean {
-  return cnae.startsWith("85");
+  const d = new Date(String(dateText ?? ""));
+  if (Number.isNaN(d.getTime())) return 0;
+  const diff = Date.now() - d.getTime();
+  return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25)));
 }
 
 function cnaeToSegment(cnae: string): SchoolSegment {
@@ -74,49 +82,43 @@ function cnaeToSegment(cnae: string): SchoolSegment {
     case "8593700":
       return "idiomas/bilingue";
     default:
-      return isEducationalCnae(cnae) ? "ed. basica" : "indefinido";
+      return "ed. basica";
   }
 }
 
-function scoreHeuristic(row: OpenCnpjRow, requestedCnae: string): { score: number; icp: ICPMatch } {
-  let score = 0;
+function matchesSegment(row: IneqRow, cnae: string): boolean {
+  switch (cnae) {
+    case "8513900":
+      return Number(row.qt_mat_fund ?? 0) > 0;
+    case "8520100":
+      return Number(row.qt_mat_med ?? 0) > 0;
+    case "8512100":
+    case "8511200":
+      return Number(row.qt_mat_inf ?? 0) > 0;
+    case "8541400":
+      return Number(row.qt_mat_med ?? 0) > 0;
+    case "8593700":
+      return Number(row.qt_mat_bas ?? 0) > 0;
+    default:
+      return Number(row.qt_mat_bas ?? 0) > 0;
+  }
+}
 
-  const capital = parseCapitalSocial(row.capital_social);
-  if (capital >= 500000) score += 20;
-  else if (capital >= 200000) score += 15;
-  else if (capital >= 50000) score += 10;
-
-  const porte = String(row.porte ?? "").toUpperCase();
-  if (porte.includes("EPP")) score += 12;
-  else if (porte.includes("ME")) score += 8;
-  else score += 5;
-
-  const cnae = normalizeDigits(row.cnae_fiscal);
-  if (cnae === requestedCnae) score += 20;
-  else if (isEducationalCnae(cnae)) score += 10;
-
-  const years = yearsSince(row.data_inicio_atividade);
-  if (years > 15) score += 10;
-  else if (years >= 5) score += 15;
-  else if (years >= 3) score += 8;
-  else score += 3;
-
-  if (String(row.website ?? "").trim()) score += 10;
-  const phone = String(row.telefone ?? row.telefone_1 ?? "").trim();
-  if (phone) score += 10;
-
-  const icp: ICPMatch = score >= 60 ? "alto" : score >= 35 ? "medio" : "baixo";
-  return { score, icp };
+async function fetchBrasilApiCnpj(cnpj: string): Promise<BrasilApiCnpj | null> {
+  try {
+    const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { cache: "no-store" });
+    if (!resp.ok) return null;
+    return (await resp.json()) as BrasilApiCnpj;
+  } catch {
+    return null;
+  }
 }
 
 async function fetchCep(cep: string): Promise<CepResponse | null> {
-  const cleanCep = normalizeDigits(cep);
-  if (cleanCep.length !== 8) return null;
-
+  const clean = normalizeDigits(cep);
+  if (clean.length !== 8) return null;
   try {
-    const resp = await fetch(`https://brasilapi.com.br/api/cep/v2/${cleanCep}`, {
-      cache: "no-store",
-    });
+    const resp = await fetch(`https://brasilapi.com.br/api/cep/v2/${clean}`, { cache: "no-store" });
     if (!resp.ok) return null;
     return (await resp.json()) as CepResponse;
   } catch {
@@ -124,112 +126,48 @@ async function fetchCep(cep: string): Promise<CepResponse | null> {
   }
 }
 
-function normalizeCity(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+function scoreHeuristic(
+  inep: IneqRow,
+  cnpjData: BrasilApiCnpj | null,
+  requestedCnae: string,
+): { score: number; icp: ICPMatch } {
+  let score = 0;
+
+  const capital = parseNumber(cnpjData?.capital_social);
+  if (capital >= 500000) score += 20;
+  else if (capital >= 200000) score += 15;
+  else if (capital >= 50000) score += 10;
+
+  const porte = String(cnpjData?.porte ?? "").toUpperCase();
+  if (porte.includes("EPP")) score += 12;
+  else if (porte.includes("ME")) score += 8;
+  else score += 5;
+
+  const cnae = normalizeDigits(cnpjData?.cnae_fiscal);
+  if (cnae && cnae === requestedCnae) score += 20;
+  else if (cnae.startsWith("85")) score += 10;
+  else if (matchesSegment(inep, requestedCnae)) score += 10;
+
+  const years = yearsSince(cnpjData?.data_inicio_atividade);
+  if (years > 15) score += 10;
+  else if (years >= 5) score += 15;
+  else if (years >= 3) score += 8;
+  else score += 3;
+
+  const websiteCandidate = String(cnpjData?.nome_fantasia ?? "");
+  if (websiteCandidate) score += 10;
+
+  const phone = `${cnpjData?.ddd_telefone_1 ?? ""}${cnpjData?.ddd_telefone_2 ?? ""}`;
+  if (normalizeDigits(phone)) score += 10;
+
+  const icp: ICPMatch = score >= 60 ? "alto" : score >= 35 ? "medio" : "baixo";
+  return { score, icp };
 }
 
-function segmentForRequestedCnae(cnae: string): SchoolSegment {
-  return cnaeToSegment(cnae);
-}
-
-function mapDbLeadToSearchLead(row: Partial<SchoolLead>, idx: number): SchoolLead {
-  const now = new Date().toISOString();
-  return {
-    id: row.id ?? `db-${idx}`,
-    name: row.name ?? "Escola",
-    place_type: row.place_type ?? "school",
-    school_segment: (row.school_segment ?? "indefinido") as SchoolSegment,
-    is_private: row.is_private ?? "Sim",
-    phone_number: row.phone_number ?? null,
-    phone_formatted: row.phone_formatted ?? null,
-    whatsapp_ready: row.whatsapp_ready ?? "Nao",
-    website: row.website ?? null,
-    email: row.email ?? null,
-    address: row.address ?? null,
-    bairro: row.bairro ?? null,
-    city: row.city ?? null,
-    state: row.state ?? null,
-    cep: row.cep ?? null,
-    latitude: row.latitude ?? null,
-    longitude: row.longitude ?? null,
-    cep_lat: row.cep_lat ?? null,
-    cep_lng: row.cep_lng ?? null,
-    reviews_count: row.reviews_count ?? null,
-    reviews_average: row.reviews_average ?? null,
-    opens_at: row.opens_at ?? null,
-    place_id: row.place_id ?? null,
-    maps_url: row.maps_url ?? null,
-    cnpj: row.cnpj ?? null,
-    razao_social: row.razao_social ?? null,
-    situacao_cadastral: row.situacao_cadastral ?? null,
-    data_abertura: row.data_abertura ?? null,
-    capital_social: row.capital_social ?? null,
-    porte: row.porte ?? null,
-    cnae_descricao: row.cnae_descricao ?? null,
-    inep_code: row.inep_code ?? null,
-    total_matriculas: row.total_matriculas ?? null,
-    ideb_af: row.ideb_af ?? null,
-    ai_score: row.ai_score ?? null,
-    icp_match: row.icp_match ?? null,
-    pain_points: row.pain_points ?? null,
-    abordagem_sugerida: row.abordagem_sugerida ?? null,
-    prioridade: row.prioridade ?? null,
-    justificativa_score: row.justificativa_score ?? null,
-    pipeline_stage: row.pipeline_stage ?? "Novo",
-    owner: row.owner ?? null,
-    notes: row.notes ?? null,
-    next_action: row.next_action ?? null,
-    source: row.source ?? "supabase_fallback",
-    data_quality: row.data_quality ?? null,
-    scraped_at: row.scraped_at ?? null,
-    created_at: row.created_at ?? now,
-    updated_at: row.updated_at ?? now,
-  };
-}
-
-async function fetchOpenCnpj(cidade: string, cnae: string, estado?: string): Promise<OpenCnpjRow[] | null> {
-  const base = (process.env.OPENCNPJ_BASE_URL ?? "https://api.opencnpj.org").replace(/\/$/, "");
-  const apiKey = process.env.OPENCNPJ_API_KEY?.trim();
-  const headers: Record<string, string> = {};
-  if (apiKey) {
-    headers["Authorization"] = `Bearer ${apiKey}`;
-    headers["x-api-key"] = apiKey;
-  }
-
-  const cityVariants = Array.from(new Set([cidade, normalizeCity(cidade)]));
-  const endpoints = [
-    `${base}/busca`,
-    `${base}/v1/busca`,
-  ];
-
-  for (const endpoint of endpoints) {
-    for (const city of cityVariants) {
-      const url = `${endpoint}?municipio=${encodeURIComponent(city)}&cnae=${encodeURIComponent(cnae)}&situacao=Ativa&limit=50${estado ? `&uf=${encodeURIComponent(estado)}` : ""}`;
-      try {
-        const resp = await fetch(url, { cache: "no-store", headers });
-        if (!resp.ok) continue;
-        const raw = (await resp.json()) as unknown;
-        if (Array.isArray(raw)) return raw as OpenCnpjRow[];
-        if (Array.isArray((raw as { resultados?: unknown[] }).resultados)) {
-          return ((raw as { resultados?: unknown[] }).resultados ?? []) as OpenCnpjRow[];
-        }
-      } catch {
-        // try next variant
-      }
-    }
-  }
-  return null;
-}
-
-function toPhoneFormatted(raw: string): string | null {
-  const digits = normalizeDigits(raw);
-  if (!digits) return null;
-  if (digits.startsWith("55")) return `+${digits}`;
-  return `+55${digits}`;
+function isPrivateFromTpRede(tpRede: number | null): "Sim" | "Nao" | "Indefinido" {
+  if (tpRede === 4) return "Sim";
+  if (tpRede === 1 || tpRede === 2 || tpRede === 3) return "Nao";
+  return "Indefinido";
 }
 
 export async function POST(request: NextRequest) {
@@ -238,111 +176,105 @@ export async function POST(request: NextRequest) {
   const estado = String(body.estado ?? "").trim().toUpperCase();
   const cnae = normalizeDigits(body.cnae);
 
-  if (!cidade || !cnae) {
-    return NextResponse.json({ error: "cidade e cnae são obrigatórios" }, { status: 400 });
+  if (!cidade || !estado || !cnae) {
+    return NextResponse.json({ error: "estado, cidade e cnae são obrigatórios" }, { status: 400 });
   }
 
-  const rows = (await fetchOpenCnpj(cidade, cnae, estado)) ?? [];
+  const { supabase, error: clientError } = getServerSupabaseClient();
+  if (!supabase) {
+    return NextResponse.json({ error: clientError }, { status: 500 });
+  }
 
-  // Fallback resiliente: se OpenCNPJ indisponível, retorna resultados já existentes no Supabase.
-  if (rows.length === 0) {
-    const { supabase } = getServerSupabaseClient();
-    if (supabase) {
-      const requestedSegment = segmentForRequestedCnae(cnae);
-      const cityNormalized = normalizeCity(cidade);
+  // Fonte primária: Censo INEP carregado em inep_schools.
+  const { data, error } = await supabase
+    .from("inep_schools")
+    .select("*")
+    .eq("sg_uf", estado)
+    .ilike("no_municipio", `%${cidade}%`)
+    .limit(300);
 
-      let query = supabase
-        .from("school_leads")
-        .select("*")
-        .eq("is_private", "Sim")
-        .order("ai_score", { ascending: false, nullsFirst: false })
-        .limit(50);
+  if (error) {
+    return NextResponse.json({ error: `Falha ao consultar INEP: ${error.message}` }, { status: 500 });
+  }
 
-      if (estado) {
-        query = query.eq("state", estado);
-      }
-
-      // Tenta cidade normal e sem acento para bases heterogêneas.
-      query = query.or(`city.ilike.%${cidade}%,city.ilike.%${cityNormalized}%`);
-
-      const { data } = await query;
-
-      const filtered = (data ?? []).filter((lead) => {
-        const leadSegment = String(lead.school_segment ?? "").toLowerCase();
-        const expectedSegment = requestedSegment.toLowerCase();
-        return leadSegment === expectedSegment || leadSegment.includes("ensino") || leadSegment.includes("educacao");
-      });
-
-      return NextResponse.json(filtered.map((lead, idx) => mapDbLeadToSearchLead(lead as Partial<SchoolLead>, idx)));
-    }
-
+  const inepRows = ((data ?? []) as IneqRow[]).filter((row) => matchesSegment(row, cnae));
+  if (inepRows.length === 0) {
     return NextResponse.json([]);
   }
 
   const now = new Date().toISOString();
-  const leads: SchoolLead[] = [];
 
-  for (let idx = 0; idx < rows.length; idx += 1) {
-    const row = rows[idx];
-    const score = scoreHeuristic(row, cnae);
-    const cep = normalizeDigits(row.cep);
-    const cepData = cep ? await fetchCep(cep) : null;
+  const leads = await Promise.all(
+    inepRows.slice(0, 80).map(async (row, index) => {
+      const cnpj = normalizeDigits(row.cnpj);
+      const cnpjData = cnpj.length === 14 ? await fetchBrasilApiCnpj(cnpj) : null;
+      const cep = normalizeDigits(cnpjData?.cep);
+      const cepData = await fetchCep(cep);
+      const score = scoreHeuristic(row, cnpjData, cnae);
 
-    const phoneRaw = String(row.telefone ?? row.telefone_1 ?? "");
-    const phoneFormatted = toPhoneFormatted(phoneRaw);
+      const rawPhone = `${cnpjData?.ddd_telefone_1 ?? ""}${cnpjData?.ddd_telefone_2 ?? ""}`;
+      const phoneDigits = normalizeDigits(rawPhone);
+      const phoneFormatted = phoneDigits ? `+55${phoneDigits}` : null;
 
-    leads.push({
-      id: `tmp-${idx}-${normalizeDigits(row.cnpj) || "no-cnpj"}`,
-      name: String(row.nome_fantasia ?? row.razao_social ?? "Escola"),
-      place_type: "school",
-      school_segment: cnaeToSegment(cnae),
-      is_private: "Sim",
-      phone_number: phoneRaw || null,
-      phone_formatted: phoneFormatted,
-      whatsapp_ready: phoneFormatted ? "Sim" : "Nao",
-      website: row.website ? String(row.website) : null,
-      email: row.email ? String(row.email) : null,
-      address: row.logradouro ? String(row.logradouro) : null,
-      bairro: row.bairro ? String(row.bairro) : cepData?.neighborhood ?? null,
-      city: row.municipio ? String(row.municipio) : cepData?.city ?? cidade,
-      state: row.uf ? String(row.uf) : cepData?.state ?? (estado || null),
-      cep: cep || null,
-      latitude: cepData?.location?.coordinates?.latitude ? Number(cepData.location.coordinates.latitude) : null,
-      longitude: cepData?.location?.coordinates?.longitude ? Number(cepData.location.coordinates.longitude) : null,
-      cep_lat: cepData?.location?.coordinates?.latitude ? Number(cepData.location.coordinates.latitude) : null,
-      cep_lng: cepData?.location?.coordinates?.longitude ? Number(cepData.location.coordinates.longitude) : null,
-      reviews_count: null,
-      reviews_average: null,
-      opens_at: null,
-      place_id: normalizeDigits(row.cnpj) || null,
-      maps_url: null,
-      cnpj: normalizeDigits(row.cnpj) || null,
-      razao_social: row.razao_social ? String(row.razao_social) : null,
-      situacao_cadastral: row.situacao_cadastral ? String(row.situacao_cadastral) : "Ativa",
-      data_abertura: row.data_inicio_atividade ? String(row.data_inicio_atividade) : null,
-      capital_social: parseCapitalSocial(row.capital_social) || null,
-      porte: row.porte?.toUpperCase().includes("EPP") ? "EPP" : row.porte?.toUpperCase().includes("ME") ? "ME" : "Demais",
-      cnae_descricao: row.cnae_fiscal_descricao ? String(row.cnae_fiscal_descricao) : null,
-      inep_code: null,
-      total_matriculas: null,
-      ideb_af: null,
-      ai_score: score.score,
-      icp_match: score.icp,
-      pain_points: null,
-      abordagem_sugerida: "Abordar com proposta de automação comercial e melhoria de captação.",
-      prioridade: score.score >= 60 ? "imediata" : score.score >= 35 ? "normal" : "baixa",
-      justificativa_score: `Score local heurístico (${score.score} pontos).`,
-      pipeline_stage: "Novo",
-      owner: null,
-      notes: null,
-      next_action: null,
-      source: "opencnpj_search",
-      data_quality: 70,
-      scraped_at: now,
-      created_at: now,
-      updated_at: now,
-    });
-  }
+      const lead: SchoolLead = {
+        id: `inep-${row.co_entidade}-${index}`,
+        name: String(cnpjData?.nome_fantasia ?? cnpjData?.razao_social ?? row.no_entidade ?? "Escola"),
+        place_type: "school",
+        school_segment: cnaeToSegment(cnae),
+        is_private: isPrivateFromTpRede(row.tp_rede),
+        phone_number: phoneDigits || null,
+        phone_formatted: phoneFormatted,
+        whatsapp_ready: phoneFormatted ? "Sim" : "Nao",
+        website: null,
+        email: cnpjData?.email ?? null,
+        address: cnpjData?.logradouro ?? null,
+        bairro: cnpjData?.bairro ?? cepData?.neighborhood ?? null,
+        city: cnpjData?.municipio ?? row.no_municipio ?? cepData?.city ?? cidade,
+        state: cnpjData?.uf ?? row.sg_uf ?? cepData?.state ?? estado,
+        cep: cep || null,
+        latitude: cepData?.location?.coordinates?.latitude ? Number(cepData.location.coordinates.latitude) : null,
+        longitude: cepData?.location?.coordinates?.longitude ? Number(cepData.location.coordinates.longitude) : null,
+        cep_lat: cepData?.location?.coordinates?.latitude ? Number(cepData.location.coordinates.latitude) : null,
+        cep_lng: cepData?.location?.coordinates?.longitude ? Number(cepData.location.coordinates.longitude) : null,
+        reviews_count: null,
+        reviews_average: null,
+        opens_at: null,
+        place_id: cnpj || row.co_entidade,
+        maps_url: null,
+        cnpj: cnpj || null,
+        razao_social: cnpjData?.razao_social ?? row.no_entidade ?? null,
+        situacao_cadastral: "Ativa",
+        data_abertura: cnpjData?.data_inicio_atividade ?? null,
+        capital_social: parseNumber(cnpjData?.capital_social) || null,
+        porte: cnpjData?.porte?.toUpperCase().includes("EPP")
+          ? "EPP"
+          : cnpjData?.porte?.toUpperCase().includes("ME")
+            ? "ME"
+            : "Demais",
+        cnae_descricao: cnpjData?.cnae_fiscal_descricao ?? null,
+        inep_code: row.co_entidade,
+        total_matriculas: row.qt_mat_bas,
+        ideb_af: row.nu_ideb_af,
+        ai_score: score.score,
+        icp_match: score.icp,
+        pain_points: null,
+        abordagem_sugerida: "Abordar com proposta de captação e gestão comercial para escolas.",
+        prioridade: score.score >= 60 ? "imediata" : score.score >= 35 ? "normal" : "baixa",
+        justificativa_score: `Score heurístico com base no INEP + BrasilAPI (${score.score} pts).`,
+        pipeline_stage: "Novo",
+        owner: null,
+        notes: null,
+        next_action: null,
+        source: "inep_censo",
+        data_quality: 75,
+        scraped_at: now,
+        created_at: now,
+        updated_at: now,
+      };
+
+      return lead;
+    }),
+  );
 
   return NextResponse.json(leads);
 }

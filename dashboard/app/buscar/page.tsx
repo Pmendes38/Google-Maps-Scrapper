@@ -186,7 +186,7 @@ export default function BuscarPage() {
     <main className="mx-auto max-w-7xl px-6 py-10">
       <header className="mb-6">
         <h1 className="text-3xl font-semibold tracking-tight">Buscar Escolas</h1>
-        <p className="mt-1 text-sm text-gray-600">Pesquisa ativa com OpenCNPJ + enriquecimento de CEP + score heurístico</p>
+        <p className="mt-1 text-sm text-gray-600">Fonte primária: Censo INEP. Depois cruzamos com BrasilAPI (CNPJ/CEP) e calculamos score heurístico.</p>
       </header>
 
       <section className="mb-6 rounded-2xl border border-gray-200 bg-white p-4">
