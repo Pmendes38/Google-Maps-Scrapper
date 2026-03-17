@@ -1,6 +1,5 @@
-import Link from "next/link";
-
 import { FilterBar } from "@/components/FilterBar";
+import { ImportCsvButton } from "@/components/ImportCsvButton";
 import { LeadCard } from "@/components/LeadCard";
 import { StatsPanel } from "@/components/StatsPanel";
 import { getServerSupabaseClient } from "@/lib/supabase-server";
@@ -70,14 +69,7 @@ export default async function Home({
           <h1 className="text-3xl font-semibold tracking-tight">Wayzen School Intelligence</h1>
           <p className="mt-1 text-sm text-gray-600">Leads priorizados para operacao comercial escolar</p>
         </div>
-        <div className="flex gap-3 text-sm">
-          <Link className="rounded-full border border-gray-300 bg-white px-4 py-2 hover:border-gray-400" href="/pipeline">
-            Pipeline
-          </Link>
-          <Link className="rounded-full border border-gray-300 bg-white px-4 py-2 hover:border-gray-400" href="/map">
-            Mapa
-          </Link>
-        </div>
+        <ImportCsvButton />
       </header>
 
       <section className="mb-6">
