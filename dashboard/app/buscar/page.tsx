@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { LeadCard } from "@/components/LeadCard";
 import type { SchoolLead } from "@/lib/types";
@@ -8,6 +8,15 @@ import type { SchoolLead } from "@/lib/types";
 type SegmentOption = {
   label: string;
   cnae: string;
+};
+
+type UfOption = {
+  sigla: string;
+  nome: string;
+};
+
+type CityOption = {
+  nome: string;
 };
 
 const SEGMENTS: SegmentOption[] = [
@@ -20,17 +29,82 @@ const SEGMENTS: SegmentOption[] = [
 ];
 
 export default function BuscarPage() {
+  const [estado, setEstado] = useState("");
   const [cidade, setCidade] = useState("");
   const [cnae, setCnae] = useState(SEGMENTS[0].cnae);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingUfs, setIsLoadingUfs] = useState(false);
+  const [isLoadingCities, setIsLoadingCities] = useState(false);
   const [results, setResults] = useState<SchoolLead[]>([]);
   const [toast, setToast] = useState<string | null>(null);
+  const [ufs, setUfs] = useState<UfOption[]>([]);
+  const [cities, setCities] = useState<CityOption[]>([]);
 
   const segmentLabel = useMemo(() => SEGMENTS.find((s) => s.cnae === cnae)?.label ?? "", [cnae]);
 
+  useEffect(() => {
+    let isMounted = true;
+    async function loadUfs() {
+      setIsLoadingUfs(true);
+      try {
+        const response = await fetch("https://brasilapi.com.br/api/ibge/uf/v1", { cache: "no-store" });
+        const payload = (await response.json()) as UfOption[];
+        if (isMounted && Array.isArray(payload)) {
+          const sorted = [...payload].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+          setUfs(sorted);
+        }
+      } catch {
+        if (isMounted) setToast("Falha ao carregar lista de estados.");
+      } finally {
+        if (isMounted) setIsLoadingUfs(false);
+      }
+    }
+    loadUfs();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCities() {
+      if (!estado) {
+        setCities([]);
+        setCidade("");
+        return;
+      }
+
+      setIsLoadingCities(true);
+      setCidade("");
+      try {
+        const response = await fetch(`https://brasilapi.com.br/api/ibge/municipios/v1/${estado}`, {
+          cache: "no-store",
+        });
+        const payload = (await response.json()) as CityOption[];
+        if (isMounted && Array.isArray(payload)) {
+          const sorted = [...payload].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+          setCities(sorted);
+        }
+      } catch {
+        if (isMounted) {
+          setCities([]);
+          setToast("Falha ao carregar lista de cidades para o estado selecionado.");
+        }
+      } finally {
+        if (isMounted) setIsLoadingCities(false);
+      }
+    }
+
+    loadCities();
+    return () => {
+      isMounted = false;
+    };
+  }, [estado]);
+
   async function handleBuscar() {
-    if (!cidade.trim()) {
-      setToast("Informe uma cidade para buscar.");
+    if (!estado || !cidade.trim()) {
+      setToast("Selecione estado e cidade para buscar.");
       return;
     }
 
@@ -41,7 +115,7 @@ export default function BuscarPage() {
       const response = await fetch("/api/buscar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cidade, cnae }),
+        body: JSON.stringify({ estado, cidade, cnae }),
       });
 
       const payload = (await response.json()) as SchoolLead[] | { error?: string };
@@ -60,6 +134,32 @@ export default function BuscarPage() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function salvarTodosNoPipeline() {
+    if (results.length === 0) return;
+    setIsLoading(true);
+
+    let ok = 0;
+    let fail = 0;
+
+    for (const lead of results) {
+      try {
+        const response = await fetch("/api/leads", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(lead),
+        });
+        if (response.ok) ok += 1;
+        else fail += 1;
+      } catch {
+        fail += 1;
+      }
+    }
+
+    setIsLoading(false);
+    setToast(`${ok} leads salvos no pipeline${fail ? ` (${fail} falharam)` : ""}.`);
+    setTimeout(() => setToast(null), 4000);
   }
 
   async function salvarNoPipeline(lead: SchoolLead) {
@@ -90,13 +190,41 @@ export default function BuscarPage() {
       </header>
 
       <section className="mb-6 rounded-2xl border border-gray-200 bg-white p-4">
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <input
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <select
             className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-gray-500"
+            disabled={isLoadingUfs}
+            onChange={(e) => setEstado(e.target.value)}
+            value={estado}
+          >
+            <option value="">{isLoadingUfs ? "Carregando estados..." : "Selecione o estado"}</option>
+            {ufs.map((uf) => (
+              <option key={uf.sigla} value={uf.sigla}>
+                {uf.nome} ({uf.sigla})
+              </option>
+            ))}
+          </select>
+
+          <select
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-gray-500"
+            disabled={!estado || isLoadingCities}
             onChange={(e) => setCidade(e.target.value)}
-            placeholder="Cidade (ex: Brasília, São Paulo)"
             value={cidade}
-          />
+          >
+            <option value="">
+              {!estado
+                ? "Selecione o estado primeiro"
+                : isLoadingCities
+                  ? "Carregando cidades..."
+                  : "Selecione a cidade"}
+            </option>
+            {cities.map((city) => (
+              <option key={city.nome} value={city.nome}>
+                {city.nome}
+              </option>
+            ))}
+          </select>
+
           <select
             className="rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-gray-500"
             onChange={(e) => setCnae(e.target.value)}
@@ -117,7 +245,19 @@ export default function BuscarPage() {
             {isLoading ? "Buscando..." : "Buscar"}
           </button>
         </div>
-        <p className="mt-2 text-xs text-gray-500">Segmento selecionado: {segmentLabel}</p>
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <p className="text-xs text-gray-500">Segmento selecionado: {segmentLabel}</p>
+          {results.length > 0 && (
+            <button
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1 text-xs hover:border-gray-400"
+              disabled={isLoading}
+              onClick={salvarTodosNoPipeline}
+              type="button"
+            >
+              + Salvar todos no Pipeline
+            </button>
+          )}
+        </div>
       </section>
 
       {isLoading && (

@@ -191,7 +191,7 @@ function mapDbLeadToSearchLead(row: Partial<SchoolLead>, idx: number): SchoolLea
   };
 }
 
-async function fetchOpenCnpj(cidade: string, cnae: string): Promise<OpenCnpjRow[] | null> {
+async function fetchOpenCnpj(cidade: string, cnae: string, estado?: string): Promise<OpenCnpjRow[] | null> {
   const base = (process.env.OPENCNPJ_BASE_URL ?? "https://api.opencnpj.org").replace(/\/$/, "");
   const apiKey = process.env.OPENCNPJ_API_KEY?.trim();
   const headers: Record<string, string> = {};
@@ -208,7 +208,7 @@ async function fetchOpenCnpj(cidade: string, cnae: string): Promise<OpenCnpjRow[
 
   for (const endpoint of endpoints) {
     for (const city of cityVariants) {
-      const url = `${endpoint}?municipio=${encodeURIComponent(city)}&cnae=${encodeURIComponent(cnae)}&situacao=Ativa&limit=50`;
+      const url = `${endpoint}?municipio=${encodeURIComponent(city)}&cnae=${encodeURIComponent(cnae)}&situacao=Ativa&limit=50${estado ? `&uf=${encodeURIComponent(estado)}` : ""}`;
       try {
         const resp = await fetch(url, { cache: "no-store", headers });
         if (!resp.ok) continue;
@@ -233,30 +233,39 @@ function toPhoneFormatted(raw: string): string | null {
 }
 
 export async function POST(request: NextRequest) {
-  const body = (await request.json()) as { cidade?: string; cnae?: string };
+  const body = (await request.json()) as { cidade?: string; estado?: string; cnae?: string };
   const cidade = String(body.cidade ?? "").trim();
+  const estado = String(body.estado ?? "").trim().toUpperCase();
   const cnae = normalizeDigits(body.cnae);
 
   if (!cidade || !cnae) {
     return NextResponse.json({ error: "cidade e cnae são obrigatórios" }, { status: 400 });
   }
 
-  const rows = (await fetchOpenCnpj(cidade, cnae)) ?? [];
+  const rows = (await fetchOpenCnpj(cidade, cnae, estado)) ?? [];
 
   // Fallback resiliente: se OpenCNPJ indisponível, retorna resultados já existentes no Supabase.
   if (rows.length === 0) {
     const { supabase } = getServerSupabaseClient();
     if (supabase) {
       const requestedSegment = segmentForRequestedCnae(cnae);
-      const cityNormalized = normalizeCity(cidade).toLowerCase();
+      const cityNormalized = normalizeCity(cidade);
 
-      const { data } = await supabase
+      let query = supabase
         .from("school_leads")
         .select("*")
         .eq("is_private", "Sim")
-        .ilike("city", `%${cityNormalized}%`)
         .order("ai_score", { ascending: false, nullsFirst: false })
         .limit(50);
+
+      if (estado) {
+        query = query.eq("state", estado);
+      }
+
+      // Tenta cidade normal e sem acento para bases heterogêneas.
+      query = query.or(`city.ilike.%${cidade}%,city.ilike.%${cityNormalized}%`);
+
+      const { data } = await query;
 
       const filtered = (data ?? []).filter((lead) => {
         const leadSegment = String(lead.school_segment ?? "").toLowerCase();
@@ -296,7 +305,7 @@ export async function POST(request: NextRequest) {
       address: row.logradouro ? String(row.logradouro) : null,
       bairro: row.bairro ? String(row.bairro) : cepData?.neighborhood ?? null,
       city: row.municipio ? String(row.municipio) : cepData?.city ?? cidade,
-      state: row.uf ? String(row.uf) : cepData?.state ?? null,
+      state: row.uf ? String(row.uf) : cepData?.state ?? (estado || null),
       cep: cep || null,
       latitude: cepData?.location?.coordinates?.latitude ? Number(cepData.location.coordinates.latitude) : null,
       longitude: cepData?.location?.coordinates?.longitude ? Number(cepData.location.coordinates.longitude) : null,
