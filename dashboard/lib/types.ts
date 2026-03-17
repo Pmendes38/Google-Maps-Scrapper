@@ -70,3 +70,60 @@ export interface SchoolLead {
   created_at: string;
   updated_at: string;
 }
+
+export interface EscolaSocio {
+  nome: string;
+  qualificacao: string;
+}
+
+export interface EscolaProfile {
+  id: string;
+  name: string;
+  inep_code: string;
+  cnpj: string;
+  school_segment: string;
+  is_private: string;
+  pipeline_stage: string;
+  ai_score: number | null;
+  icp_match: string | null;
+  abordagem_sugerida: string | null;
+  pain_points: string[] | null;
+  phone_formatted: string | null;
+  website: string | null;
+  email: string | null;
+  address: string | null;
+  bairro: string | null;
+  city: string | null;
+  state: string | null;
+  cep: string | null;
+  lat: number | null;
+  lng: number | null;
+  total_matriculas: number | null;
+  total_professores: number | null;
+  total_funcionarios: number | null;
+  localizacao: "Urbana" | "Rural" | null;
+  ideb_ai: number | null;
+  ideb_af: number | null;
+  taxa_aprovacao: number | null;
+  taxa_reprovacao: number | null;
+  taxa_abandono: number | null;
+  etapas_ensino: string[];
+  tem_internet: boolean;
+  tem_biblioteca: boolean;
+  tem_lab_informatica: boolean;
+  tem_lab_ciencias: boolean;
+  tem_quadra: boolean;
+  tem_sala_leitura: boolean;
+  tem_acessibilidade: boolean;
+  tem_auditorio: boolean;
+  tem_cozinha: boolean;
+  tem_banheiro: boolean;
+  qtd_salas_aula: number | null;
+  razao_social: string | null;
+  capital_social: number | null;
+  porte: string | null;
+  data_abertura: string | null;
+  anos_operacao: number | null;
+  socios: EscolaSocio[];
+  situacao_cadastral: string | null;
+}
