@@ -35,6 +35,23 @@ type CepResponse = {
   };
 };
 
+type IneqRow = {
+  co_entidade: string;
+  no_entidade: string | null;
+  cnpj: string | null;
+  tp_rede: number | null;
+  qt_mat_bas: number | null;
+  qt_mat_inf: number | null;
+  qt_mat_fund: number | null;
+  qt_mat_med: number | null;
+  nu_ideb_ai: number | null;
+  nu_ideb_af: number | null;
+  in_internet: boolean | number | null;
+  in_lab_informatica: boolean | number | null;
+  no_municipio: string | null;
+  sg_uf: string | null;
+};
+
 const CNPJ_CACHE_TTL_MS = 10 * 60 * 1000;
 const cnpjCache = new Map<string, { expiresAt: number; data: BrasilApiCnpj | null }>();
 
@@ -148,6 +165,21 @@ function normalizeSocios(cnpjData: BrasilApiCnpj | null): EscolaSocio[] {
     }));
 }
 
+function inferSegmentFromInep(row: IneqRow | null): string {
+  if (!row) return "indefinido";
+  if (Number(row.qt_mat_med ?? 0) > 0) return "ensino medio";
+  if (Number(row.qt_mat_fund ?? 0) > 0) return "ensino fundamental";
+  if (Number(row.qt_mat_inf ?? 0) > 0) return "educacao infantil";
+  if (Number(row.qt_mat_bas ?? 0) > 0) return "ed. basica";
+  return "indefinido";
+}
+
+function inferIsPrivateFromTpRede(tpRede: number | null): string {
+  if (tpRede === 4) return "Sim";
+  if (tpRede === 1 || tpRede === 2 || tpRede === 3) return "Nao";
+  return "Indefinido";
+}
+
 async function fetchEducacaoInep(inepCode: string): Promise<AnyObject | null> {
   const urls = [
     `http://educacao.dadosabertosbr.com/api/escola/${inepCode}`,
@@ -236,6 +268,25 @@ async function findLeadByIdentifier(
   return null;
 }
 
+async function findInepByIdentifier(
+  supabase: ReturnType<typeof getServerSupabaseClient>["supabase"],
+  identifier: string,
+): Promise<IneqRow | null> {
+  if (!supabase) return null;
+
+  const digits = normalizeDigits(identifier);
+  if (!digits) return null;
+
+  const byCode = await supabase
+    .from("inep_schools")
+    .select("*")
+    .eq("co_entidade", digits)
+    .maybeSingle();
+
+  if (byCode.data) return byCode.data as IneqRow;
+  return null;
+}
+
 export async function GET(_request: NextRequest, { params }: { params: { id: string } }) {
   const identifier = String(params.id ?? "").trim();
   if (!identifier) {
@@ -248,40 +299,42 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
   }
 
   const lead = await findLeadByIdentifier(supabase, identifier);
-  if (!lead) {
-    return NextResponse.json({ error: "Escola não encontrada na base de leads" }, { status: 404 });
+  const inepFallback = lead ? null : await findInepByIdentifier(supabase, identifier);
+  if (!lead && !inepFallback) {
+    return NextResponse.json({ error: "Escola não encontrada na base" }, { status: 404 });
   }
 
-  const inepCode = String(lead.inep_code ?? "").trim();
-  const cnpjDigits = normalizeDigits(lead.cnpj ?? identifier);
+  const inepCode = String(lead?.inep_code ?? inepFallback?.co_entidade ?? "").trim();
+  const cnpjDigits = normalizeDigits(lead?.cnpj ?? inepFallback?.cnpj ?? identifier);
 
   const educacaoData = inepCode ? await fetchEducacaoInep(inepCode) : null;
   const cnpjData = cnpjDigits.length === 14 ? await fetchBrasilApiCnpj(cnpjDigits) : null;
-  const cepDigits = normalizeDigits(lead.cep ?? cnpjData?.cep ?? pickString(educacaoData, ["cep", "endereco.cep"]));
+  const cepDigits = normalizeDigits(lead?.cep ?? cnpjData?.cep ?? pickString(educacaoData, ["cep", "endereco.cep"]));
   const cepData = await fetchBrasilApiCep(cepDigits);
 
   const dataAbertura =
-    String(cnpjData?.data_inicio_atividade ?? lead.data_abertura ?? "").trim() || null;
+    String(cnpjData?.data_inicio_atividade ?? lead?.data_abertura ?? "").trim() || null;
 
   const lat =
-    toNullableNumber(lead.latitude) ??
-    toNullableNumber(lead.cep_lat) ??
+    toNullableNumber(lead?.latitude) ??
+    toNullableNumber(lead?.cep_lat) ??
     pickNumber(educacaoData, ["latitude", "lat", "coordenadas.latitude", "gps.latitude"]) ??
     toNullableNumber(cepData?.location?.coordinates?.latitude);
 
   const lng =
-    toNullableNumber(lead.longitude) ??
-    toNullableNumber(lead.cep_lng) ??
+    toNullableNumber(lead?.longitude) ??
+    toNullableNumber(lead?.cep_lng) ??
     pickNumber(educacaoData, ["longitude", "lng", "coordenadas.longitude", "gps.longitude"]) ??
     toNullableNumber(cepData?.location?.coordinates?.longitude);
 
   const infraNode = toRecord(pickFirst(educacaoData, ["infraestrutura", "dados_infraestrutura", "infra"]));
 
   const profile: EscolaProfile = {
-    id: String(lead.id ?? identifier),
+    id: String(lead?.id ?? inepCode ?? identifier),
     name:
       String(
-        lead.name ??
+        lead?.name ??
+          inepFallback?.no_entidade ??
           cnpjData?.nome_fantasia ??
           cnpjData?.razao_social ??
           pickString(educacaoData, ["nome", "nomeEscola", "escola"]) ??
@@ -289,21 +342,21 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       ).trim() || "Escola",
     inep_code: inepCode || normalizeDigits(identifier),
     cnpj: cnpjDigits || "",
-    school_segment: String(lead.school_segment ?? "indefinido"),
-    is_private: String(lead.is_private ?? "Indefinido"),
-    pipeline_stage: String(lead.pipeline_stage ?? "Novo"),
-    ai_score: toNullableNumber(lead.ai_score),
-    icp_match: String(lead.icp_match ?? "").trim() || null,
-    abordagem_sugerida: String(lead.abordagem_sugerida ?? "").trim() || null,
-    pain_points: Array.isArray(lead.pain_points)
-      ? (lead.pain_points.map((item) => String(item)) as string[])
+    school_segment: String(lead?.school_segment ?? inferSegmentFromInep(inepFallback)),
+    is_private: String(lead?.is_private ?? inferIsPrivateFromTpRede(inepFallback?.tp_rede ?? null)),
+    pipeline_stage: String(lead?.pipeline_stage ?? "Novo"),
+    ai_score: toNullableNumber(lead?.ai_score),
+    icp_match: String(lead?.icp_match ?? "").trim() || null,
+    abordagem_sugerida: String(lead?.abordagem_sugerida ?? "").trim() || null,
+    pain_points: Array.isArray(lead?.pain_points)
+      ? (lead?.pain_points?.map((item) => String(item)) as string[])
       : null,
-    phone_formatted: String(lead.phone_formatted ?? "").trim() || null,
-    website: String(lead.website ?? "").trim() || null,
-    email: String(lead.email ?? cnpjData?.email ?? "").trim() || null,
+    phone_formatted: String(lead?.phone_formatted ?? "").trim() || null,
+    website: String(lead?.website ?? "").trim() || null,
+    email: String(lead?.email ?? cnpjData?.email ?? "").trim() || null,
     address:
       String(
-        lead.address ??
+        lead?.address ??
           cnpjData?.logradouro ??
           pickString(educacaoData, ["endereco.logradouro", "logradouro"]) ??
           cepData?.street ??
@@ -311,7 +364,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       ).trim() || null,
     bairro:
       String(
-        lead.bairro ??
+        lead?.bairro ??
           cnpjData?.bairro ??
           pickString(educacaoData, ["endereco.bairro", "bairro"]) ??
           cepData?.neighborhood ??
@@ -319,7 +372,8 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       ).trim() || null,
     city:
       String(
-        lead.city ??
+        lead?.city ??
+          inepFallback?.no_municipio ??
           cnpjData?.municipio ??
           pickString(educacaoData, ["municipio", "cidade", "endereco.municipio"]) ??
           cepData?.city ??
@@ -327,7 +381,8 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       ).trim() || null,
     state:
       String(
-        lead.state ??
+        lead?.state ??
+          inepFallback?.sg_uf ??
           cnpjData?.uf ??
           pickString(educacaoData, ["uf", "estado", "endereco.uf"]) ??
           cepData?.state ??
@@ -338,7 +393,8 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     lng,
     total_matriculas:
       pickNumber(educacaoData, ["qtdAlunos", "total_alunos", "alunos.total", "matriculas.total"]) ??
-      toNullableNumber(lead.total_matriculas),
+      toNullableNumber(lead?.total_matriculas) ??
+      toNullableNumber(inepFallback?.qt_mat_bas),
     total_professores: pickNumber(educacaoData, ["qtdProfessores", "total_professores", "professores"]),
     total_funcionarios:
       pickNumber(educacaoData, ["qtdFuncionarios", "total_funcionarios", "funcionarios"]) ?? null,
@@ -347,10 +403,12 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     ),
     ideb_ai:
       pickNumber(educacaoData, ["ideb.ai", "idebAnosIniciais", "nu_ideb_ai"]) ??
-      toNullableNumber(lead.ideb_ai),
+      toNullableNumber(lead?.ideb_ai) ??
+      toNullableNumber(inepFallback?.nu_ideb_ai),
     ideb_af:
       pickNumber(educacaoData, ["ideb.af", "idebAnosFinais", "nu_ideb_af"]) ??
-      toNullableNumber(lead.ideb_af),
+      toNullableNumber(lead?.ideb_af) ??
+      toNullableNumber(inepFallback?.nu_ideb_af),
     taxa_aprovacao: pickNumber(educacaoData, ["taxaAprovacao", "rendimento.aprovacao", "aprovacao"]),
     taxa_reprovacao: pickNumber(educacaoData, ["taxaReprovacao", "rendimento.reprovacao", "reprovacao"]),
     taxa_abandono: pickNumber(educacaoData, ["taxaAbandono", "rendimento.abandono", "abandono"]),
@@ -359,11 +417,13 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     ),
     tem_internet:
       pickBoolean(infraNode, ["internet", "temInternet", "in_internet"]) ||
-      toBoolean(lead.tem_internet),
+      toBoolean(lead?.tem_internet) ||
+      toBoolean(inepFallback?.in_internet),
     tem_biblioteca: pickBoolean(infraNode, ["biblioteca", "temBiblioteca", "in_biblioteca"]),
     tem_lab_informatica:
       pickBoolean(infraNode, ["laboratorioInformatica", "temLabInformatica", "in_lab_informatica"]) ||
-      toBoolean(lead.tem_lab_informatica),
+      toBoolean(lead?.tem_lab_informatica) ||
+      toBoolean(inepFallback?.in_lab_informatica),
     tem_lab_ciencias: pickBoolean(infraNode, ["laboratorioCiencias", "temLabCiencias", "in_lab_ciencias"]),
     tem_quadra: pickBoolean(infraNode, ["quadraEsportes", "temQuadra", "in_quadra_esportes"]),
     tem_sala_leitura: pickBoolean(infraNode, ["salaLeitura", "temSalaLeitura", "in_sala_leitura"]),
@@ -372,15 +432,15 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     tem_cozinha: pickBoolean(infraNode, ["cozinha", "temCozinha", "in_cozinha"]),
     tem_banheiro: pickBoolean(infraNode, ["banheiro", "temBanheiro", "in_banheiro"]),
     qtd_salas_aula: pickNumber(educacaoData, ["qtdSalasAula", "salasAula", "salas_aula"]),
-    razao_social: String(cnpjData?.razao_social ?? lead.razao_social ?? "").trim() || null,
-    capital_social: toNullableNumber(cnpjData?.capital_social) ?? toNullableNumber(lead.capital_social),
+    razao_social: String(cnpjData?.razao_social ?? lead?.razao_social ?? "").trim() || null,
+    capital_social: toNullableNumber(cnpjData?.capital_social) ?? toNullableNumber(lead?.capital_social),
     porte:
-      String(cnpjData?.porte ?? cnpjData?.descricao_porte ?? lead.porte ?? "").trim() || null,
+      String(cnpjData?.porte ?? cnpjData?.descricao_porte ?? lead?.porte ?? "").trim() || null,
     data_abertura: dataAbertura,
     anos_operacao: yearsSince(dataAbertura),
     socios: normalizeSocios(cnpjData),
     situacao_cadastral:
-      String(cnpjData?.situacao_cadastral ?? lead.situacao_cadastral ?? "").trim() || null,
+      String(cnpjData?.situacao_cadastral ?? lead?.situacao_cadastral ?? "").trim() || null,
   };
 
   return NextResponse.json(profile);
