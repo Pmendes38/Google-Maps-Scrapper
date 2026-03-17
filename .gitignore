@@ -11,3 +11,12 @@ dashboard/node_modules/
 dashboard/.next/
 dashboard/.env.local
 npm-debug.log*
+# temp / utility scripts (contain credentials)
+check_supabase.py
+check_out.txt
+check_out2.txt
+check_err2.txt
+check_result.txt
+supabase_check_output.json
+.migrations_applied
+dashboard/build_log.txt
