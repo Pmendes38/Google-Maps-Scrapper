@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { LeadCard } from "@/components/LeadCard";
@@ -275,6 +276,12 @@ export default function BuscarPage() {
         {results.map((lead) => (
           <div className="space-y-2" key={lead.id}>
             <LeadCard lead={lead} />
+            <Link
+              className="block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-center text-sm hover:border-gray-400"
+              href={`/escolas/${lead.inep_code ?? lead.id}`}
+            >
+              Ver página da escola
+            </Link>
             <button
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm hover:border-gray-400"
               onClick={() => salvarNoPipeline(lead)}

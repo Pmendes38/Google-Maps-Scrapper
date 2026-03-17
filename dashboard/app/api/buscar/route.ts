@@ -217,7 +217,7 @@ export async function POST(request: NextRequest) {
       const phoneFormatted = phoneDigits ? `+55${phoneDigits}` : null;
 
       const lead: SchoolLead = {
-        id: `inep-${row.co_entidade}-${index}`,
+        id: String(row.co_entidade),
         name: String(cnpjData?.nome_fantasia ?? cnpjData?.razao_social ?? row.no_entidade ?? "Escola"),
         place_type: "school",
         school_segment: cnaeToSegment(cnae),
