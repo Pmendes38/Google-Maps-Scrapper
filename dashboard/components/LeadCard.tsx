@@ -12,7 +12,10 @@ export function LeadCard({ lead, compact = false }: { lead: SchoolLead; compact?
     <article className="rounded-xl border border-gray-200 bg-white p-4 transition-colors hover:border-gray-300">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <Link className="block truncate font-medium text-gray-900 hover:text-[var(--accent)]" href={`/leads/${lead.id}`}>
+          <Link
+            className="block truncate font-medium text-gray-900 hover:text-[var(--accent)]"
+            href={`/escolas/${lead.inep_code ?? lead.id}`}
+          >
             {lead.name}
           </Link>
           <p className="mt-0.5 text-sm text-gray-500">
