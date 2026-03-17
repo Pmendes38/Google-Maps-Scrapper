@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { getServerSupabaseClient } from "@/lib/supabase-server";
 import type { ICPMatch, SchoolLead, SchoolSegment } from "@/lib/types";
 
 type OpenCnpjRow = {
@@ -123,6 +124,107 @@ async function fetchCep(cep: string): Promise<CepResponse | null> {
   }
 }
 
+function normalizeCity(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function segmentForRequestedCnae(cnae: string): SchoolSegment {
+  return cnaeToSegment(cnae);
+}
+
+function mapDbLeadToSearchLead(row: Partial<SchoolLead>, idx: number): SchoolLead {
+  const now = new Date().toISOString();
+  return {
+    id: row.id ?? `db-${idx}`,
+    name: row.name ?? "Escola",
+    place_type: row.place_type ?? "school",
+    school_segment: (row.school_segment ?? "indefinido") as SchoolSegment,
+    is_private: row.is_private ?? "Sim",
+    phone_number: row.phone_number ?? null,
+    phone_formatted: row.phone_formatted ?? null,
+    whatsapp_ready: row.whatsapp_ready ?? "Nao",
+    website: row.website ?? null,
+    email: row.email ?? null,
+    address: row.address ?? null,
+    bairro: row.bairro ?? null,
+    city: row.city ?? null,
+    state: row.state ?? null,
+    cep: row.cep ?? null,
+    latitude: row.latitude ?? null,
+    longitude: row.longitude ?? null,
+    cep_lat: row.cep_lat ?? null,
+    cep_lng: row.cep_lng ?? null,
+    reviews_count: row.reviews_count ?? null,
+    reviews_average: row.reviews_average ?? null,
+    opens_at: row.opens_at ?? null,
+    place_id: row.place_id ?? null,
+    maps_url: row.maps_url ?? null,
+    cnpj: row.cnpj ?? null,
+    razao_social: row.razao_social ?? null,
+    situacao_cadastral: row.situacao_cadastral ?? null,
+    data_abertura: row.data_abertura ?? null,
+    capital_social: row.capital_social ?? null,
+    porte: row.porte ?? null,
+    cnae_descricao: row.cnae_descricao ?? null,
+    inep_code: row.inep_code ?? null,
+    total_matriculas: row.total_matriculas ?? null,
+    ideb_af: row.ideb_af ?? null,
+    ai_score: row.ai_score ?? null,
+    icp_match: row.icp_match ?? null,
+    pain_points: row.pain_points ?? null,
+    abordagem_sugerida: row.abordagem_sugerida ?? null,
+    prioridade: row.prioridade ?? null,
+    justificativa_score: row.justificativa_score ?? null,
+    pipeline_stage: row.pipeline_stage ?? "Novo",
+    owner: row.owner ?? null,
+    notes: row.notes ?? null,
+    next_action: row.next_action ?? null,
+    source: row.source ?? "supabase_fallback",
+    data_quality: row.data_quality ?? null,
+    scraped_at: row.scraped_at ?? null,
+    created_at: row.created_at ?? now,
+    updated_at: row.updated_at ?? now,
+  };
+}
+
+async function fetchOpenCnpj(cidade: string, cnae: string): Promise<OpenCnpjRow[] | null> {
+  const base = (process.env.OPENCNPJ_BASE_URL ?? "https://api.opencnpj.org").replace(/\/$/, "");
+  const apiKey = process.env.OPENCNPJ_API_KEY?.trim();
+  const headers: Record<string, string> = {};
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+    headers["x-api-key"] = apiKey;
+  }
+
+  const cityVariants = Array.from(new Set([cidade, normalizeCity(cidade)]));
+  const endpoints = [
+    `${base}/busca`,
+    `${base}/v1/busca`,
+  ];
+
+  for (const endpoint of endpoints) {
+    for (const city of cityVariants) {
+      const url = `${endpoint}?municipio=${encodeURIComponent(city)}&cnae=${encodeURIComponent(cnae)}&situacao=Ativa&limit=50`;
+      try {
+        const resp = await fetch(url, { cache: "no-store", headers });
+        if (!resp.ok) continue;
+        const raw = (await resp.json()) as unknown;
+        if (Array.isArray(raw)) return raw as OpenCnpjRow[];
+        if (Array.isArray((raw as { resultados?: unknown[] }).resultados)) {
+          return ((raw as { resultados?: unknown[] }).resultados ?? []) as OpenCnpjRow[];
+        }
+      } catch {
+        // try next variant
+      }
+    }
+  }
+  return null;
+}
+
 function toPhoneFormatted(raw: string): string | null {
   const digits = normalizeDigits(raw);
   if (!digits) return null;
@@ -139,20 +241,34 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "cidade e cnae são obrigatórios" }, { status: 400 });
   }
 
-  const url = `https://api.opencnpj.org/busca?municipio=${encodeURIComponent(cidade)}&cnae=${encodeURIComponent(cnae)}&situacao=Ativa&limit=50`;
+  const rows = (await fetchOpenCnpj(cidade, cnae)) ?? [];
 
-  const opencnpjResp = await fetch(url, { cache: "no-store" });
-  if (!opencnpjResp.ok) {
-    const text = await opencnpjResp.text();
-    return NextResponse.json({ error: `OpenCNPJ error: ${text.slice(0, 300)}` }, { status: opencnpjResp.status });
+  // Fallback resiliente: se OpenCNPJ indisponível, retorna resultados já existentes no Supabase.
+  if (rows.length === 0) {
+    const { supabase } = getServerSupabaseClient();
+    if (supabase) {
+      const requestedSegment = segmentForRequestedCnae(cnae);
+      const cityNormalized = normalizeCity(cidade).toLowerCase();
+
+      const { data } = await supabase
+        .from("school_leads")
+        .select("*")
+        .eq("is_private", "Sim")
+        .ilike("city", `%${cityNormalized}%`)
+        .order("ai_score", { ascending: false, nullsFirst: false })
+        .limit(50);
+
+      const filtered = (data ?? []).filter((lead) => {
+        const leadSegment = String(lead.school_segment ?? "").toLowerCase();
+        const expectedSegment = requestedSegment.toLowerCase();
+        return leadSegment === expectedSegment || leadSegment.includes("ensino") || leadSegment.includes("educacao");
+      });
+
+      return NextResponse.json(filtered.map((lead, idx) => mapDbLeadToSearchLead(lead as Partial<SchoolLead>, idx)));
+    }
+
+    return NextResponse.json([]);
   }
-
-  const raw = (await opencnpjResp.json()) as unknown;
-  const rows: OpenCnpjRow[] = Array.isArray(raw)
-    ? (raw as OpenCnpjRow[])
-    : Array.isArray((raw as { resultados?: unknown[] }).resultados)
-      ? (((raw as { resultados?: unknown[] }).resultados ?? []) as OpenCnpjRow[])
-      : [];
 
   const now = new Date().toISOString();
   const leads: SchoolLead[] = [];
