@@ -6,3 +6,8 @@ playwright/.cache/
 .venv/
 .venv311/
 .env
+node_modules/
+dashboard/node_modules/
+dashboard/.next/
+dashboard/.env.local
+npm-debug.log*
