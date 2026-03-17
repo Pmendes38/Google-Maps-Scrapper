@@ -48,7 +48,7 @@ export default function BuscarPage() {
     async function loadUfs() {
       setIsLoadingUfs(true);
       try {
-        const response = await fetch("https://brasilapi.com.br/api/ibge/uf/v1", { cache: "no-store" });
+        const response = await fetch("/api/localidades/ufs", { cache: "no-store" });
         const payload = (await response.json()) as UfOption[];
         if (isMounted && Array.isArray(payload)) {
           const sorted = [...payload].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
@@ -79,7 +79,7 @@ export default function BuscarPage() {
       setIsLoadingCities(true);
       setCidade("");
       try {
-        const response = await fetch(`https://brasilapi.com.br/api/ibge/municipios/v1/${estado}`, {
+        const response = await fetch(`/api/localidades/cidades?uf=${estado}`, {
           cache: "no-store",
         });
         const payload = (await response.json()) as CityOption[];
