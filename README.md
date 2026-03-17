@@ -1,86 +1,105 @@
-# Google-Maps-Scrapper
-This Python script utilizes the Playwright library to perform web scraping and data extraction from Google Maps. It is particularly designed for obtaining information about businesses, including their name, address, website, phone number, reviews, and more.
+# Wayzen Extractor
 
-To do a custom web scraping project you can find me on Upwork
+Fase 1 do blueprint da Wayzen School Intelligence Platform. O projeto agora combina scraping resiliente no Google Maps com uma camada inicial de normalização, enriquecimento público e ETL do Censo Escolar.
 
-<a href="https://www.upwork.com/freelancers/~01dbb4d47d167c2d43" target="_blank">
-<img src=https://img.shields.io/badge/Upwork-6FDA44?&style=for-the-badge&logo=medium&logoColor=white alt=medium style="margin-bottom: 5px;" />
-</a>
+## Estrutura
 
-## Table of Contents
-- [Prerequisites](#prerequisites)
-- [Key Features](#key-features)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Example](#example)
-- [Notes](#notes)
-- [Video Example](#video-example)
+- `main.py`: wrapper compatível com o entrypoint antigo.
+- `scraper/main.py`: CLI principal de scraping e enriquecimento.
+- `scraper/validators.py`: normalização, segmentação escolar e score básico de qualidade.
+- `scraper/enricher.py`: enriquecimento com CEP e CNPJ via APIs públicas.
+- `scraper/inep_etl.py`: ETL do INEP e match com leads coletados.
+- `supabase/migrations/`: schema inicial para persistência no Supabase/PostgreSQL.
 
-## Prerequisites
-- Python 3.8 or 3.9 (Python 3.10+ may not be compatible with some dependencies)
-- Google Chrome or Chromium browser installed (for Playwright)
+## Requisitos
 
-## Key Features
-- Data Scraping: The script scrapes data from Google Maps listings, extracting valuable information about businesses, such as their name, address, website, and contact details.
+- Python 3.11+
+- Playwright Chromium instalado
 
-- Review Analysis: It extracts review counts and average ratings, providing insights into businesses' online reputation.
+## Instalação
 
-- Business Type Detection: The script identifies whether a business offers in-store shopping, in-store pickup, or delivery services.
-
-- Operating Hours: It extracts information about the business's operating hours.
-
-- Introduction Extraction: The script also scrapes introductory information about the businesses when available.
-
-- Data Cleansing: It cleanses and organizes the scraped data, removing redundant or unnecessary columns.
-
-- CSV Export: The cleaned data is exported to a CSV file for further analysis or integration with other tools.
-
-## Installation
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/zohaibbashir/Google-Maps-Scrapper.git
-   cd google-maps-scraper
-   ```
-2. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Install Playwright browsers:
-   ```bash
-   playwright install
-   ```
-
-## Usage
-
-Run the script with your desired search term and number of results:
+1. Criar e ativar o ambiente virtual:
 
 ```bash
-python main.py -s "Turkish Restaurants in Toronto Canada" -t 20
+python -m venv .venv311
+.venv311\Scripts\activate
 ```
 
-- `-s` or `--search`: Search query for Google Maps (default: "turkish stores in toronto Canada")
-- `-t` or `--total`: Number of results to scrape (default: 1)
-- `-o` or `--output`: Output CSV file path (default: result.csv)
-- `--append`: Append results to the output file instead of overwriting (default: off)
+2. Instalar dependências:
 
-## Example
-
-Append new results to an existing CSV file:
 ```bash
-python main.py -s "Turkish Restaurants in Toronto Canada" -t 20 -o toronto_turkish_restaurants.csv --append
+pip install -r requirements.txt
 ```
 
-The script will launch a browser, perform the search, and start scraping information. Progress will be displayed in the terminal, and results will be saved to the specified CSV file. If `--append` is used, new results will be added to the end of the file without removing previous data.
+3. Instalar o navegador do Playwright:
 
-## Notes
-- The script opens a visible browser window (not headless) for scraping.
-- Google Maps DOM may change, which can break the script. If you encounter issues, update the XPaths in `main.py`.
-- Avoid running too many scrapes in a short period to prevent being blocked by Google.
+```bash
+playwright install chromium
+```
 
-## Video Example
+## Scraping
 
-https://www.linkedin.com/posts/zohaibbashir_python-data-webscraping-activity-7093920891411062784-flEQ
+Coleta simples de escolas particulares:
 
-## License
+```bash
+python main.py -s "Escolas particulares Brasília DF" -t 20 -o brasilia_private_schools.csv
+```
+
+Coleta com append:
+
+```bash
+python main.py -s "Escolas particulares Goiânia GO" -t 20 -o centro_oeste_schools.csv --append
+```
+
+Coleta em lote a partir de um arquivo texto com uma cidade por linha:
+
+```bash
+python main.py --cities cidades.txt -t 20 -o schools_batch.csv
+```
+
+Enriquecimento de um CSV existente:
+
+```bash
+python main.py --enrich-only -i brasilia_private_schools.csv -o brasilia_private_schools_enriched.csv
+```
+
+## ETL INEP
+
+Extrair escolas privadas ativas do ZIP dos microdados:
+
+```bash
+python scraper\inep_etl.py --zip CENSO_ESCOLAR_2025.zip --output data\inep_private_schools.csv
+```
+
+Enriquecer leads existentes com match por CNPJ ou nome:
+
+```bash
+python scraper\inep_etl.py --zip CENSO_ESCOLAR_2025.zip --output data\inep_private_schools.csv --leads-input brasilia_private_schools.csv --leads-output brasilia_private_schools_inep.csv
+```
+
+## Saída CSV
+
+O CSV segue schema fixo orientado ao objeto `SchoolLead`, incluindo:
+
+- identificação do lead
+- contato e endereço normalizados
+- inferência de segmento escolar
+- metadados de scraping
+- campos reservados para enriquecimento, score e pipeline
+
+## Banco de Dados
+
+As migrations iniciais já foram adicionadas em `supabase/migrations/` para:
+
+- `school_leads`
+- `inep_schools`
+
+## Observações
+
+- O scraping continua sensível a mudanças no DOM do Google Maps, mas agora usa seletores mais tolerantes.
+- O browser roda visível por padrão. Use `--headless` quando o fluxo estiver estável no seu ambiente.
+- O matching do INEP usa `fuzzywuzzy` com aceleração via `python-Levenshtein`.
+
+## Licença
+
 MIT
