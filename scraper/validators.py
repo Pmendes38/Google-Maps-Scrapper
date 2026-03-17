@@ -45,9 +45,11 @@ def normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", ascii_text).strip().lower()
 
 
-def clean_digits(value: str) -> str:
-    """Mantém apenas dígitos de um texto."""
-    return re.sub(r"\D", "", value or "")
+def clean_digits(value: Any) -> str:
+    """Mantém apenas dígitos de um texto ou número."""
+    if value is None:
+        return ""
+    return re.sub(r"\D", "", str(value))
 
 
 def extract_cep_from_address(address: str) -> str:

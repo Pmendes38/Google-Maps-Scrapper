@@ -71,8 +71,8 @@ class Pipeline:
 
         LOG.info(f"Enriquecendo {input_path} (skip_geo={skip_geo})...")
         
-        # Chamar via subprocess (delegando para main.py)
-        cmd = ['python', 'scraper/main.py', '--enrich-only', '-i', str(input_path), '-o', str(output_path)]
+        # Use o mesmo interpretador atual e módulo Python para manter imports estáveis
+        cmd = [sys.executable, '-m', 'scraper.main', '--enrich-only', '-i', str(input_path), '-o', str(output_path)]
         if skip_geo:
             cmd.append('--skip-geo')
         
@@ -107,7 +107,7 @@ class Pipeline:
         LOG.info(f"Crawlando {input_path} com {self.workers} workers, timeout={self.timeout}s...")
         
         cmd = [
-            'python', 'scraper/crawler.py',
+            sys.executable, '-m', 'scraper.crawler',
             '-i', str(input_path),
             '-o', str(output_path),
             '--timeout', str(self.timeout),
@@ -146,7 +146,7 @@ class Pipeline:
         LOG.info(f"Scoring {input_path}...")
         
         cmd = [
-            'python', 'scraper/scorer.py',
+            sys.executable, '-m', 'scraper.scorer',
             '-i', str(input_path),
             '-o', str(output_path),
             '--batch-size', str(batch_size),
