@@ -75,7 +75,91 @@ function isPositiveStatus(value: string | null): boolean {
   return text.includes("ativa") || text.includes("ativo");
 }
 
-function icon(active: boolean, children: React.ReactNode) {
+type InfraIcon =
+  | "internet"
+  | "biblioteca"
+  | "labInfo"
+  | "labCiencia"
+  | "quadra"
+  | "leitura"
+  | "acessibilidade"
+  | "auditorio";
+
+function icon(active: boolean, iconName: InfraIcon) {
+  const common = active ? "text-[#BF00FF]" : "text-white/35";
+
+  const iconNode = (() => {
+    switch (iconName) {
+      case "internet":
+        return (
+          <svg className={`h-5 w-5 ${common}`} fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <path d="M2.5 9.5a14.8 14.8 0 0 1 19 0" />
+            <path d="M5.5 13a10 10 0 0 1 13 0" />
+            <path d="M8.8 16.2a5.4 5.4 0 0 1 6.4 0" />
+            <circle cx="12" cy="19" r="1.2" fill="currentColor" stroke="none" />
+          </svg>
+        );
+      case "biblioteca":
+        return (
+          <svg className={`h-5 w-5 ${common}`} fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <path d="M5 4.5h3.5V19H5z" />
+            <path d="M10.2 4.5h3.5V19h-3.5z" />
+            <path d="M15.4 6h3.5v13h-3.5z" />
+          </svg>
+        );
+      case "labInfo":
+        return (
+          <svg className={`h-5 w-5 ${common}`} fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <rect height="9" rx="1.5" width="14" x="5" y="4.5" />
+            <path d="M10 17.5h4" />
+            <path d="M8 20h8" />
+          </svg>
+        );
+      case "labCiencia":
+        return (
+          <svg className={`h-5 w-5 ${common}`} fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <path d="M9 4h6" />
+            <path d="M10 4v5l-4 7a3 3 0 0 0 2.6 4.5h6.8A3 3 0 0 0 18 16l-4-7V4" />
+          </svg>
+        );
+      case "quadra":
+        return (
+          <svg className={`h-5 w-5 ${common}`} fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <rect height="14" rx="2" width="18" x="3" y="5" />
+            <path d="M12 5v14" />
+            <circle cx="12" cy="12" r="2" />
+          </svg>
+        );
+      case "leitura":
+        return (
+          <svg className={`h-5 w-5 ${common}`} fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H11v15H6.5A2.5 2.5 0 0 0 4 21z" />
+            <path d="M20 6.5A2.5 2.5 0 0 0 17.5 4H13v15h4.5A2.5 2.5 0 0 1 20 21z" />
+          </svg>
+        );
+      case "acessibilidade":
+        return (
+          <svg className={`h-5 w-5 ${common}`} fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <circle cx="12" cy="4.5" r="1.8" />
+            <path d="M6 8h12" />
+            <path d="M12 8v5" />
+            <path d="M12 13l3 6" />
+            <path d="M12 13l-3 6" />
+          </svg>
+        );
+      case "auditorio":
+        return (
+          <svg className={`h-5 w-5 ${common}`} fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+            <path d="M4 6h16l-2 12H6z" />
+            <path d="M8 10h8" />
+            <path d="M9 13h6" />
+          </svg>
+        );
+      default:
+        return null;
+    }
+  })();
+
   return (
     <span
       className={`flex h-11 w-11 items-center justify-center rounded-xl border text-lg ${
@@ -84,7 +168,7 @@ function icon(active: boolean, children: React.ReactNode) {
           : "border-white/15 bg-white/5 text-white/35"
       }`}
     >
-      {children}
+      {iconNode}
     </span>
   );
 }
@@ -282,14 +366,14 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
   const scorePct = scorePercent(profile.ai_score);
 
   const infrastructureItems = [
-    { label: "Internet", value: profile.tem_internet, icon: "🌐" },
-    { label: "Biblioteca", value: profile.tem_biblioteca, icon: "📚" },
-    { label: "Lab. Informatica", value: profile.tem_lab_informatica, icon: "💻" },
-    { label: "Lab. Ciencias", value: profile.tem_lab_ciencias, icon: "🔬" },
-    { label: "Quadra esportes", value: profile.tem_quadra, icon: "🏟️" },
-    { label: "Sala de leitura", value: profile.tem_sala_leitura, icon: "📖" },
-    { label: "Acessibilidade", value: profile.tem_acessibilidade, icon: "♿" },
-    { label: "Auditorio", value: profile.tem_auditorio, icon: "🎭" },
+    { label: "Internet", value: profile.tem_internet, icon: "internet" as const },
+    { label: "Biblioteca", value: profile.tem_biblioteca, icon: "biblioteca" as const },
+    { label: "Lab. Informatica", value: profile.tem_lab_informatica, icon: "labInfo" as const },
+    { label: "Lab. Ciencias", value: profile.tem_lab_ciencias, icon: "labCiencia" as const },
+    { label: "Quadra esportes", value: profile.tem_quadra, icon: "quadra" as const },
+    { label: "Sala de leitura", value: profile.tem_sala_leitura, icon: "leitura" as const },
+    { label: "Acessibilidade", value: profile.tem_acessibilidade, icon: "acessibilidade" as const },
+    { label: "Auditorio", value: profile.tem_auditorio, icon: "auditorio" as const },
   ];
 
   return (
