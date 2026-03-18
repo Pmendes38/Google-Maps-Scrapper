@@ -19,6 +19,7 @@ export type IcpFitResult = {
   justificativa: string;
   abordagem: string;
   painPoints: string[];
+  estimatedRevenue: number;
   dimensions: {
     d1Segmento: number;
     d2Faturamento: number;
@@ -162,6 +163,7 @@ export function computeIcpFitScore(input: IcpFitInput): IcpFitResult {
       justificativa: "Escola nao privada: fora do ICP comercial da Wayzen.",
       abordagem: buildApproach(0),
       painPoints: ["Dependencia administrativa fora do ICP alvo (privada)."],
+      estimatedRevenue: revenue,
       dimensions: {
         d1Segmento: 0,
         d2Faturamento: 0,
@@ -180,6 +182,7 @@ export function computeIcpFitScore(input: IcpFitInput): IcpFitResult {
       justificativa: "Faturamento estimado abaixo de R$30 mil/mês: fora do ICP.",
       abordagem: buildApproach(0),
       painPoints: ["Faturamento estimado abaixo do minimo do ICP."],
+      estimatedRevenue: revenue,
       dimensions: {
         d1Segmento: 0,
         d2Faturamento: 0,
@@ -207,6 +210,7 @@ export function computeIcpFitScore(input: IcpFitInput): IcpFitResult {
     justificativa: `ICP ${score}/100 (Segmento ${d1Segmento}, Faturamento ${d2Faturamento}, Conversao ${d3DependenciaConversao}, Contato ${d4Contato}, Etapas ${d5Etapas}).`,
     abordagem: buildApproach(score),
     painPoints: buildPainPoints(input, revenue),
+    estimatedRevenue: revenue,
     dimensions: {
       d1Segmento,
       d2Faturamento,

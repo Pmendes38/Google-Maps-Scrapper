@@ -87,6 +87,15 @@ export interface EscolaSocio {
   qualificacao: string;
 }
 
+export interface IcpCriterionBreakdown {
+  id: "segmento" | "faturamento" | "conversao" | "contato" | "etapas";
+  label: string;
+  max_points: number;
+  points: number;
+  school_value: string;
+  analysis: string;
+}
+
 export interface EscolaProfile {
   id: string;
   name: string;
@@ -143,4 +152,6 @@ export interface EscolaProfile {
   anos_operacao: number | null;
   socios: EscolaSocio[];
   situacao_cadastral: string | null;
+  icp_justificativa: string | null;
+  icp_criteria: IcpCriterionBreakdown[];
 }

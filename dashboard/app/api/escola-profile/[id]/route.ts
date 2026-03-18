@@ -348,6 +348,15 @@ function parseCapitalSocial(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatCurrencyBR(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "Nao informado";
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
 function tpRedeToDependencia(tpRede: number | null): string | null {
   if (tpRede === 1) return "Federal";
   if (tpRede === 2) return "Estadual";
@@ -1213,6 +1222,8 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
           lead?.situacao_cadastral ??
           "",
       ).trim() || null,
+    icp_justificativa: null,
+    icp_criteria: [],
   };
 
   const computedIcp = computeIcpFitScore({
@@ -1234,8 +1245,77 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
 
   profile.ai_score = computedIcp.score;
   profile.icp_match = computedIcp.icpMatch;
+  profile.icp_justificativa = computedIcp.justificativa;
   if (!profile.abordagem_sugerida) profile.abordagem_sugerida = computedIcp.abordagem;
   if (!profile.pain_points || profile.pain_points.length === 0) profile.pain_points = computedIcp.painPoints;
+
+  const hasPhone = Boolean(profile.phone_formatted);
+  const hasAddressOrWebsite = Boolean(profile.address || profile.website);
+  const etapasText = [
+    toNullableNumber(inepFallback?.qt_mat_inf) ?? toNullableNumber(qeduCenso?.matriculas_pre_escolar) ? "EI" : null,
+    toNullableNumber(inepFallback?.qt_mat_fund) ??
+    ((toNullableNumber(qeduCenso?.matriculas_anos_iniciais) ?? 0) + (toNullableNumber(qeduCenso?.matriculas_anos_finais) ?? 0))
+      ? "EF"
+      : null,
+    toNullableNumber(inepFallback?.qt_mat_med) ?? toNullableNumber(qeduCenso?.matriculas_ensino_medio) ? "EM" : null,
+  ]
+    .filter(Boolean)
+    .join(" + ");
+
+  profile.icp_criteria = [
+    {
+      id: "segmento",
+      label: "Segmento",
+      max_points: 25,
+      points: computedIcp.dimensions.d1Segmento,
+      school_value: `${profile.school_segment} | ${profile.is_private}`,
+      analysis: computedIcp.dimensions.d1Segmento >= 20 ? "Forte aderencia ao ICP." : "Aderencia parcial ao ICP.",
+    },
+    {
+      id: "faturamento",
+      label: "Faturamento estimado",
+      max_points: 30,
+      points: computedIcp.dimensions.d2Faturamento,
+      school_value: formatCurrencyBR(computedIcp.estimatedRevenue),
+      analysis:
+        computedIcp.dimensions.d2Faturamento >= 25
+          ? "Faixa de receita ideal para escala comercial."
+          : "Receita estimada abaixo da faixa ideal.",
+    },
+    {
+      id: "conversao",
+      label: "Dependencia de conversao",
+      max_points: 20,
+      points: computedIcp.dimensions.d3DependenciaConversao,
+      school_value: etapasText || "Nao informado",
+      analysis:
+        computedIcp.dimensions.d3DependenciaConversao >= 20
+          ? "Alta dependencia de captacao e conversao."
+          : "Dependencia moderada de conversao.",
+    },
+    {
+      id: "contato",
+      label: "Dados de contato",
+      max_points: 10,
+      points: computedIcp.dimensions.d4Contato,
+      school_value: `Telefone: ${hasPhone ? "sim" : "nao"} | Site/Endereco: ${hasAddressOrWebsite ? "sim" : "nao"}`,
+      analysis:
+        computedIcp.dimensions.d4Contato >= 10
+          ? "Contato direto disponivel para abordagem imediata."
+          : "Dados de contato incompletos para resposta rapida.",
+    },
+    {
+      id: "etapas",
+      label: "Etapas de ensino",
+      max_points: 15,
+      points: computedIcp.dimensions.d5Etapas,
+      school_value: etapasText || "Nao informado",
+      analysis:
+        computedIcp.dimensions.d5Etapas >= 12
+          ? "Combinacao de etapas favorece ICP comercial."
+          : "Oferta de etapas com menor encaixe no ICP alvo.",
+    },
+  ];
 
   return NextResponse.json(profile);
 }

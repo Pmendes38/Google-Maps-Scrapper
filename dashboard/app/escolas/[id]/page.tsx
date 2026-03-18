@@ -80,6 +80,13 @@ function scorePercent(value: number | null): number {
   return Math.max(0, Math.min(100, value));
 }
 
+function criterionColor(points: number, max: number): string {
+  const ratio = max > 0 ? points / max : 0;
+  if (ratio >= 0.75) return "bg-emerald-400";
+  if (ratio >= 0.45) return "bg-amber-400";
+  return "bg-rose-400";
+}
+
 function isPositiveStatus(value: string | null): boolean {
   const text = String(value ?? "").toLowerCase();
   return text.includes("ativa") || text.includes("ativo");
@@ -714,6 +721,40 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
                 />
               </div>
               <p className="mt-1 text-xs text-white/55">{profile.ai_score ?? 0}/100</p>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-xl border border-white/15 bg-black/20 p-4">
+            <p className="text-sm text-white/70">Como o ICP foi analisado para esta escola</p>
+            <p className="mt-1 text-xs text-white/55">
+              Segmento, faturamento estimado, dependencia de conversao, dados de contato e etapas de ensino.
+            </p>
+
+            {profile.icp_justificativa && (
+              <p className="mt-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white/75">
+                {profile.icp_justificativa}
+              </p>
+            )}
+
+            <div className="mt-4 grid gap-3">
+              {(profile.icp_criteria ?? []).map((criterion) => {
+                const pct = Math.max(0, Math.min(100, (criterion.points / criterion.max_points) * 100));
+                return (
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3" key={criterion.id}>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-white">{criterion.label}</p>
+                      <p className="text-xs text-white/70">
+                        {criterion.points}/{criterion.max_points}
+                      </p>
+                    </div>
+                    <div className="mt-2 h-2 rounded-full bg-white/10">
+                      <div className={`h-2 rounded-full ${criterionColor(criterion.points, criterion.max_points)}`} style={{ width: `${pct}%` }} />
+                    </div>
+                    <p className="mt-2 text-xs text-white/65">Escola: {criterion.school_value}</p>
+                    <p className="mt-1 text-xs text-white/50">{criterion.analysis}</p>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
