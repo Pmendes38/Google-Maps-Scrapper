@@ -47,6 +47,7 @@ type CompanyData = {
   uf?: string;
   logradouro?: string;
   bairro?: string;
+  telefones?: Array<{ ddd?: string | number; numero?: string | number; is_fax?: boolean }>;
 };
 
 type CepResponse = {
@@ -246,15 +247,33 @@ function extractPhoneDigits(data: CompanyData | null): string {
     return dddPhone;
   }
   const composed = `${data?.ddd_telefone_1 ?? ""}${data?.telefone_1 ?? ""}`;
-  return normalizeDigits(composed);
+  const composedDigits = normalizeDigits(composed);
+  if (composedDigits.length >= 8) {
+    return composedDigits;
+  }
+
+  if (Array.isArray(data?.telefones)) {
+    const entry = data.telefones.find((phone) => phone && phone.is_fax !== true) ?? data.telefones[0];
+    if (entry) {
+      const fromArray = normalizeDigits(`${entry.ddd ?? ""}${entry.numero ?? ""}`);
+      if (fromArray.length >= 8) {
+        return fromArray;
+      }
+    }
+  }
+
+  return "";
 }
 
 function extractWebsite(data: CompanyData | null): string | null {
   const candidates = [data?.website, data?.site, data?.url, data?.dominio]
     .map((v) => String(v ?? "").trim())
     .filter(Boolean);
-  const found = candidates.find((value) => value.includes("http") || value.includes("www."));
-  return found || null;
+  const found = candidates.find((value) => value.length > 3);
+  if (!found) return null;
+  if (found.startsWith("http://") || found.startsWith("https://")) return found;
+  if (found.includes(".")) return `https://${found.replace(/^www\./, "www.")}`;
+  return null;
 }
 
 function isPrivateFromTpRede(tpRede: number | null): "Sim" | "Nao" | "Indefinido" {

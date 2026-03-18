@@ -28,8 +28,10 @@ type BrasilApiCnpj = {
 
 type CompanyProfile = BrasilApiCnpj & {
   socios?: Array<{ nome?: string; qualificacao?: string; nome_socio?: string; qualificacao_socio?: string }>;
+  QSA?: Array<{ nome_socio?: string; qualificacao_socio?: string; nome?: string; qualificacao?: string }>;
   ddd_telefone_1?: string;
   telefone_1?: string;
+  telefones?: Array<{ ddd?: string | number; numero?: string | number; is_fax?: boolean }>;
   site?: string;
   website?: string;
   endereco?: string;
@@ -232,13 +234,11 @@ function normalizeEtapas(value: unknown): string[] {
 }
 
 function normalizeSocios(cnpjData: CompanyProfile | null, fallback: unknown): EscolaSocio[] {
-  const source = Array.isArray(cnpjData?.qsa)
-    ? cnpjData?.qsa
-    : Array.isArray(cnpjData?.socios)
-      ? cnpjData?.socios
-      : Array.isArray(fallback)
-        ? fallback
-        : [];
+  const fromCnpj = extractSociosFromAny(cnpjData);
+  const fromFallback = Array.isArray(fallback)
+    ? (fallback as Array<Record<string, unknown>>)
+    : extractSociosFromAny(fallback);
+  const source = fromCnpj.length > 0 ? fromCnpj : fromFallback;
 
   return source
     .map((partner) => {
@@ -281,6 +281,46 @@ function isValidLatLng(lat: number | null, lng: number | null): boolean {
 
 function normalizePhone(value: unknown): string {
   return String(value ?? "").replace(/\D/g, "");
+}
+
+function pickCoordinatePair(candidates: Array<{ lat: number | null; lng: number | null }>): {
+  lat: number | null;
+  lng: number | null;
+} {
+  for (const candidate of candidates) {
+    if (isValidLatLng(candidate.lat, candidate.lng)) {
+      return candidate;
+    }
+  }
+
+  return { lat: null, lng: null };
+}
+
+function extractSociosFromAny(source: unknown): Array<Record<string, unknown>> {
+  const record = toRecord(source);
+  const candidates = [record.qsa, record.QSA, record.socios, record.quadro_societario];
+  const first = candidates.find((item) => Array.isArray(item));
+  return Array.isArray(first) ? (first as Array<Record<string, unknown>>) : [];
+}
+
+function extractCompanyPhone(cnpjData: CompanyProfile | null): string | null {
+  if (!cnpjData) return null;
+
+  const direct = normalizePhone(cnpjData.ddd_telefone_1 ?? cnpjData.telefone_1);
+  if (direct.length >= 10) return `+55${direct}`;
+
+  const fromPairs = normalizePhone(`${cnpjData.ddd_telefone_1 ?? ""}${cnpjData.telefone_1 ?? ""}`);
+  if (fromPairs.length >= 10) return `+55${fromPairs}`;
+
+  if (Array.isArray(cnpjData.telefones)) {
+    const phoneEntry = cnpjData.telefones.find((entry) => entry && entry.is_fax !== true) ?? cnpjData.telefones[0];
+    if (phoneEntry) {
+      const composed = normalizePhone(`${phoneEntry.ddd ?? ""}${phoneEntry.numero ?? ""}`);
+      if (composed.length >= 10) return `+55${composed}`;
+    }
+  }
+
+  return null;
 }
 
 function parseCapitalSocial(value: unknown): number | null {
@@ -503,6 +543,8 @@ function mergeCompanyData(
 
   const fallbackQsa = Array.isArray(fb.qsa)
     ? fb.qsa
+    : Array.isArray((fb as AnyObject).QSA)
+      ? ((fb as AnyObject).QSA as unknown[])
     : Array.isArray(fb.socios)
       ? fb.socios
       : Array.isArray(fb.quadro_societario)
@@ -549,7 +591,17 @@ function mergeCompanyData(
     telefone_1:
       String(primary?.telefone_1 ?? fb.telefone_1 ?? fb.telefone ?? "").trim() || undefined,
     qsa: Array.isArray(primary?.qsa) && primary.qsa.length > 0 ? primary.qsa : (fallbackQsa as BrasilApiCnpj["qsa"]),
-    socios: Array.isArray(fb.socios) ? (fb.socios as CompanyProfile["socios"]) : undefined,
+    socios: Array.isArray(fb.socios)
+      ? (fb.socios as CompanyProfile["socios"])
+      : Array.isArray((fb as AnyObject).QSA)
+        ? (((fb as AnyObject).QSA as unknown[]) as CompanyProfile["socios"])
+        : undefined,
+    QSA: Array.isArray((fb as AnyObject).QSA)
+      ? (((fb as AnyObject).QSA as unknown[]) as CompanyProfile["QSA"])
+      : undefined,
+    telefones: Array.isArray((fb as AnyObject).telefones)
+      ? (((fb as AnyObject).telefones as unknown[]) as CompanyProfile["telefones"])
+      : undefined,
     site: String(primary?.site ?? fb.site ?? lead?.website ?? "").trim() || undefined,
     website: String(primary?.website ?? fb.website ?? lead?.website ?? "").trim() || undefined,
     endereco: String((fb as AnyObject).endereco ?? "").trim() || undefined,
@@ -944,22 +996,28 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
   const dataAbertura =
     String(cnpjData?.data_inicio_atividade ?? lead?.data_abertura ?? "").trim() || null;
 
-  const rawLat =
-    toNullableNumber(lead?.latitude) ??
-    toNullableNumber(lead?.cep_lat) ??
-    toNullableNumber(qeduSchool?.lat) ??
-    pickNumber(educacaoData, ["latitude", "lat", "coordenadas.latitude", "gps.latitude"]) ??
-    toNullableNumber(cepData?.location?.coordinates?.latitude);
-
-  const rawLng =
-    toNullableNumber(lead?.longitude) ??
-    toNullableNumber(lead?.cep_lng) ??
-    toNullableNumber(qeduSchool?.long) ??
-    pickNumber(educacaoData, ["longitude", "lng", "coordenadas.longitude", "gps.longitude"]) ??
-    toNullableNumber(cepData?.location?.coordinates?.longitude);
-
-  const lat = isValidLatLng(rawLat, rawLng) ? rawLat : null;
-  const lng = isValidLatLng(rawLat, rawLng) ? rawLng : null;
+  const selectedCoords = pickCoordinatePair([
+    {
+      lat: toNullableNumber(lead?.latitude),
+      lng: toNullableNumber(lead?.longitude),
+    },
+    {
+      lat: toNullableNumber(lead?.cep_lat),
+      lng: toNullableNumber(lead?.cep_lng),
+    },
+    {
+      lat: toNullableNumber(qeduSchool?.lat ?? qeduSchool?.latitude),
+      lng: toNullableNumber(qeduSchool?.long ?? qeduSchool?.lng ?? qeduSchool?.longitude),
+    },
+    {
+      lat: pickNumber(educacaoData, ["latitude", "lat", "coordenadas.latitude", "gps.latitude"]),
+      lng: pickNumber(educacaoData, ["longitude", "lng", "coordenadas.longitude", "gps.longitude"]),
+    },
+    {
+      lat: toNullableNumber(cepData?.location?.coordinates?.latitude),
+      lng: toNullableNumber(cepData?.location?.coordinates?.longitude),
+    },
+  ]);
 
   const infraNode = toRecord(pickFirst(educacaoData, ["infraestrutura", "dados_infraestrutura", "infra"]));
 
@@ -1000,6 +1058,8 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
         const cnpjPhone = normalizePhone(cnpjData?.telefone_1);
         const phone = qeduPhone || cnpjPhone;
         if (ddd && phone) return `+55${ddd}${phone}`;
+        const extractedCompanyPhone = extractCompanyPhone(cnpjData);
+        if (extractedCompanyPhone) return extractedCompanyPhone;
         const localPhone = normalizePhone(lead?.phone_number);
         if (localPhone.length >= 10) return `+55${localPhone}`;
         return null;
@@ -1045,8 +1105,8 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
           "",
       ).trim() || null,
     cep: cepDigits || null,
-    lat,
-    lng,
+    lat: selectedCoords.lat,
+    lng: selectedCoords.lng,
     total_matriculas:
       qedu?.totalMatriculas ??
       qeduCache?.qtd_matriculas ??
