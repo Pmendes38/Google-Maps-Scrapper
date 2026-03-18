@@ -568,18 +568,19 @@ export async function POST(request: NextRequest) {
 
   let fallbackCompanies: CompanyData[] = [];
   let fallbackDiscovery: CandidateLead["sourceDiscovery"] = "minha_receita";
+  const discoveryCity = normalizeText(cidade);
 
   if (inepRows.length < MIN_INEP_RESULTS) {
     if (DISCOVERY_PROVIDER === "inep_cnpjws") {
       fallbackDiscovery = "cnpjws";
-      fallbackCompanies = await fetchCnpjWsDiscovery(cidade, estado, cnae);
+      fallbackCompanies = await fetchCnpjWsDiscovery(discoveryCity, estado, cnae);
       if (fallbackCompanies.length === 0) {
         fallbackDiscovery = "minha_receita";
-        fallbackCompanies = await fetchMinhaReceitaDiscovery(cidade, estado, cnae);
+        fallbackCompanies = await fetchMinhaReceitaDiscovery(discoveryCity, estado, cnae);
       }
     } else {
       fallbackDiscovery = "minha_receita";
-      fallbackCompanies = await fetchMinhaReceitaDiscovery(cidade, estado, cnae);
+      fallbackCompanies = await fetchMinhaReceitaDiscovery(discoveryCity, estado, cnae);
     }
   }
 
