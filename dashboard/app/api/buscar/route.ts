@@ -694,9 +694,15 @@ export async function POST(request: NextRequest) {
       );
       const effectiveMatriculas = qeduMatriculas ?? normalizedInepMatriculas;
       const estimatedRevenue = estimateMonthlyRevenue(effectiveMatriculas, leadPorte, capitalSocial, segment);
+      const leadIsPrivate =
+        candidate.inepRow?.tp_rede !== null && candidate.inepRow?.tp_rede !== undefined
+          ? isPrivateFromTpRede(candidate.inepRow.tp_rede)
+          : candidate.sourceDiscovery === "inep"
+            ? "Indefinido"
+            : "Sim";
       const score = computeIcpFitScore({
         schoolSegment: segment,
-        isPrivate: isPrivateFromTpRede(candidate.inepRow?.tp_rede ?? null) === "Sim",
+        isPrivate: leadIsPrivate === "Sim",
         totalMatriculas: effectiveMatriculas,
         matriculasInfantil: candidate.inepRow?.qt_mat_inf ?? null,
         matriculasFundamental: candidate.inepRow?.qt_mat_fund ?? null,
@@ -717,7 +723,7 @@ export async function POST(request: NextRequest) {
           ) || "Escola",
         place_type: "school",
         school_segment: segment,
-        is_private: isPrivateFromTpRede(candidate.inepRow?.tp_rede ?? null),
+        is_private: leadIsPrivate,
         phone_number: phoneDigits || null,
         phone_formatted: phoneFormatted,
         whatsapp_ready: phoneFormatted ? "Sim" : "Nao",
