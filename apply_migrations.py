@@ -37,6 +37,7 @@ MIGRATIONS = [
     os.path.join(BASE_DIR, "supabase", "migrations", "002_inep_schools.sql"),
     os.path.join(BASE_DIR, "supabase", "migrations", "003_pipeline_history.sql"),
     os.path.join(BASE_DIR, "supabase", "migrations", "004_phase1_production.sql"),
+    os.path.join(BASE_DIR, "supabase", "migrations", "005_qedu_live_sync.sql"),
 ]
 
 
@@ -129,6 +130,7 @@ def verify_tables() -> dict:
         "school_source_snapshots",
         "school_source_snapshot_items",
         "school_lead_quality_audits",
+        "school_qedu_profiles",
     ]
     results = {}
     for t in tables:

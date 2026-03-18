@@ -3,11 +3,16 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-import type { SchoolLead } from "@/lib/types";
+import type { AdministrativeDependency, SchoolLead } from "@/lib/types";
 
 type SegmentOption = {
   label: string;
   cnae: string;
+};
+
+type AdministrativeOption = {
+  label: string;
+  value: AdministrativeDependency;
 };
 
 type UfOption = {
@@ -31,6 +36,15 @@ const SEGMENTS: SegmentOption[] = [
   { label: "Creche", cnae: "8511200" },
   { label: "Ensino Tecnico", cnae: "8541400" },
   { label: "Ensino de Idiomas", cnae: "8593700" },
+];
+
+const ADMINISTRATIVE_OPTIONS: AdministrativeOption[] = [
+  { label: "Todas as dependencias", value: "todas" },
+  { label: "Privada", value: "privada" },
+  { label: "Publica", value: "publica" },
+  { label: "Federal", value: "federal" },
+  { label: "Estadual", value: "estadual" },
+  { label: "Municipal", value: "municipal" },
 ];
 
 function formatCnpj(value: string | null): string {
@@ -83,6 +97,7 @@ export default function BuscarPage() {
   const [estado, setEstado] = useState("");
   const [cidade, setCidade] = useState("");
   const [cnae, setCnae] = useState(SEGMENTS[0].cnae);
+  const [administrativeType, setAdministrativeType] = useState<AdministrativeDependency>("todas");
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingUfs, setIsLoadingUfs] = useState(false);
   const [isLoadingCities, setIsLoadingCities] = useState(false);
@@ -93,6 +108,10 @@ export default function BuscarPage() {
   const [savedProfiles, setSavedProfiles] = useState<Record<string, string>>({});
 
   const segmentLabel = useMemo(() => SEGMENTS.find((s) => s.cnae === cnae)?.label ?? "", [cnae]);
+  const administrativeLabel = useMemo(
+    () => ADMINISTRATIVE_OPTIONS.find((option) => option.value === administrativeType)?.label ?? "Todas as dependencias",
+    [administrativeType],
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -164,7 +183,7 @@ export default function BuscarPage() {
       const response = await fetch("/api/buscar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ estado, cidade, cnae }),
+        body: JSON.stringify({ estado, cidade, cnae, dependencia: administrativeType }),
       });
       const payload = (await response.json()) as SchoolLead[] | { error?: string };
       if (!response.ok) {
@@ -246,7 +265,7 @@ export default function BuscarPage() {
             Busca por cidade + segmento, score heuristico e priorizacao automatica para seu pipeline.
           </p>
 
-          <div className="mt-6 grid gap-3 md:grid-cols-4">
+          <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <select
               className="wayzen-input px-3 py-3 text-sm"
               disabled={isLoadingUfs}
@@ -291,6 +310,18 @@ export default function BuscarPage() {
               ))}
             </select>
 
+            <select
+              className="wayzen-input px-3 py-3 text-sm"
+              onChange={(event) => setAdministrativeType(event.target.value as AdministrativeDependency)}
+              value={administrativeType}
+            >
+              {ADMINISTRATIVE_OPTIONS.map((option) => (
+                <option className="bg-[#14071f]" key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+
             <button
               className="wayzen-btn-primary px-4 py-3 text-sm transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={isLoading}
@@ -303,6 +334,7 @@ export default function BuscarPage() {
 
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-white/65">
             <p>Segmento selecionado: <span className="font-semibold text-white/90">{segmentLabel}</span></p>
+            <p>Dependencia: <span className="font-semibold text-white/90">{administrativeLabel}</span></p>
             <p>Resultados retornam ordenados por score.</p>
           </div>
         </div>
@@ -468,4 +500,3 @@ export default function BuscarPage() {
     </main>
   );
 }
-

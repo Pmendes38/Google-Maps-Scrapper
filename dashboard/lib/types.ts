@@ -11,6 +11,13 @@ export type SchoolSegment =
 
 export type ICPMatch = "alto" | "medio" | "baixo";
 export type Prioridade = "imediata" | "normal" | "baixa";
+export type AdministrativeDependency =
+  | "todas"
+  | "privada"
+  | "publica"
+  | "federal"
+  | "estadual"
+  | "municipal";
 export type PipelineStage =
   | "Novo"
   | "Qualificado"
@@ -67,6 +74,7 @@ export interface SchoolLead {
   source: string;
   source_discovery?: "inep" | "minha_receita" | "cnpjws";
   source_company?: "brasilapi" | "opencnpj" | "minha_receita" | "cnpjws" | "none";
+  administrative_type?: string | null;
   data_quality: number | null;
   scraped_at: string | null;
   created_at: string;
@@ -86,6 +94,8 @@ export interface EscolaProfile {
   school_segment: string;
   is_private: string;
   pipeline_stage: string;
+  dependencia_administrativa: string | null;
+  situacao_funcionamento: string | null;
   ai_score: number | null;
   icp_match: string | null;
   abordagem_sugerida: string | null;
@@ -109,6 +119,10 @@ export interface EscolaProfile {
   taxa_aprovacao: number | null;
   taxa_reprovacao: number | null;
   taxa_abandono: number | null;
+  qedu_status: "live" | "cache" | "unavailable";
+  qedu_last_sync_at: string | null;
+  qedu_censo_ano: number | null;
+  qedu_tr_ano: number | null;
   etapas_ensino: string[];
   tem_internet: boolean;
   tem_biblioteca: boolean;

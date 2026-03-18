@@ -72,6 +72,8 @@ type CandidateLead = {
   sourceDiscovery: "inep" | "minha_receita" | "cnpjws";
 };
 
+type AdministrativeFilter = "todas" | "privada" | "publica" | "federal" | "estadual" | "municipal";
+
 const DISCOVERY_PROVIDER = (process.env.DISCOVERY_PROVIDER ?? "inep_minha_receita").toLowerCase();
 const MIN_INEP_RESULTS = 30;
 const MAX_SEARCH_RESULTS = 80;
@@ -103,6 +105,42 @@ function sameState(left: unknown, right: unknown): boolean {
   const leftNormalized = normalizeText(left);
   const rightNormalized = normalizeText(right);
   return Boolean(leftNormalized) && leftNormalized === rightNormalized;
+}
+
+function normalizeAdministrativeFilter(value: unknown): AdministrativeFilter {
+  const normalized = normalizeText(value);
+  switch (normalized) {
+    case "PRIVADA":
+      return "privada";
+    case "PUBLICA":
+      return "publica";
+    case "FEDERAL":
+      return "federal";
+    case "ESTADUAL":
+      return "estadual";
+    case "MUNICIPAL":
+      return "municipal";
+    default:
+      return "todas";
+  }
+}
+
+function tpRedeToAdministrativeType(tpRede: number | null): string {
+  if (tpRede === 1) return "Federal";
+  if (tpRede === 2) return "Estadual";
+  if (tpRede === 3) return "Municipal";
+  if (tpRede === 4) return "Privada";
+  return "Nao informado";
+}
+
+function matchesAdministrativeFilter(tpRede: number | null, filter: AdministrativeFilter): boolean {
+  if (filter === "todas") return true;
+  if (filter === "privada") return tpRede === 4;
+  if (filter === "publica") return tpRede === 1 || tpRede === 2 || tpRede === 3;
+  if (filter === "federal") return tpRede === 1;
+  if (filter === "estadual") return tpRede === 2;
+  if (filter === "municipal") return tpRede === 3;
+  return true;
 }
 
 function buildCitySearchTerms(city: string): string[] {
@@ -515,10 +553,11 @@ async function createSourceSnapshot(
 }
 
 export async function POST(request: NextRequest) {
-  const body = (await request.json()) as { cidade?: string; estado?: string; cnae?: string };
+  const body = (await request.json()) as { cidade?: string; estado?: string; cnae?: string; dependencia?: string };
   const cidade = String(body.cidade ?? "").trim();
   const estado = String(body.estado ?? "").trim().toUpperCase();
   const cnae = normalizeDigits(body.cnae);
+  const administrativeFilter = normalizeAdministrativeFilter(body.dependencia);
 
   if (!cidade || !estado || !cnae) {
     return NextResponse.json({ error: "estado, cidade e cnae sao obrigatorios" }, { status: 400 });
@@ -545,9 +584,13 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Falha ao consultar INEP: ${error.message}` }, { status: 500 });
   }
 
-  const inepRows = ((data ?? []) as IneqRow[]).filter(
-    (row) => matchesSegment(row, cnae) && sameCity(row.no_municipio, cidade),
-  );
+  const inepRows = ((data ?? []) as IneqRow[]).filter((row) => {
+    return (
+      matchesSegment(row, cnae) &&
+      sameCity(row.no_municipio, cidade) &&
+      matchesAdministrativeFilter(row.tp_rede, administrativeFilter)
+    );
+  });
   const candidatesByKey = new Map<string, CandidateLead>();
   const cnpjToInepRow = new Map<string, IneqRow>();
 
@@ -569,8 +612,9 @@ export async function POST(request: NextRequest) {
   let fallbackCompanies: CompanyData[] = [];
   let fallbackDiscovery: CandidateLead["sourceDiscovery"] = "minha_receita";
   const discoveryCity = normalizeText(cidade);
+  const allowCorporateFallback = administrativeFilter === "todas" || administrativeFilter === "privada";
 
-  if (inepRows.length < MIN_INEP_RESULTS) {
+  if (allowCorporateFallback && inepRows.length < MIN_INEP_RESULTS) {
     if (DISCOVERY_PROVIDER === "inep_cnpjws") {
       fallbackDiscovery = "cnpjws";
       fallbackCompanies = await fetchCnpjWsDiscovery(discoveryCity, estado, cnae);
@@ -657,8 +701,8 @@ export async function POST(request: NextRequest) {
         email: companyData?.email ?? null,
         address: companyData?.logradouro ?? null,
         bairro: companyData?.bairro ?? cepData?.neighborhood ?? null,
-        city: companyData?.municipio ?? candidate.inepRow?.no_municipio ?? cepData?.city ?? cidade,
-        state: companyData?.uf ?? candidate.inepRow?.sg_uf ?? cepData?.state ?? estado,
+        city: candidate.inepRow?.no_municipio ?? companyData?.municipio ?? cepData?.city ?? cidade,
+        state: candidate.inepRow?.sg_uf ?? companyData?.uf ?? cepData?.state ?? estado,
         cep: cep || null,
         latitude: cepData?.location?.coordinates?.latitude ? Number(cepData.location.coordinates.latitude) : null,
         longitude: cepData?.location?.coordinates?.longitude ? Number(cepData.location.coordinates.longitude) : null,
@@ -692,6 +736,9 @@ export async function POST(request: NextRequest) {
         source: `${candidate.sourceDiscovery}_${sourceCompany}`,
         source_discovery: candidate.sourceDiscovery,
         source_company: sourceCompany,
+        administrative_type: candidate.inepRow
+          ? tpRedeToAdministrativeType(candidate.inepRow.tp_rede ?? null)
+          : "Privada",
         data_quality: 78,
         scraped_at: now,
         created_at: now,
@@ -704,6 +751,9 @@ export async function POST(request: NextRequest) {
 
   const deduped = new Map<string, SchoolLead>();
   for (const lead of leads) {
+    if (!sameCity(lead.city, cidade) || !sameState(lead.state, estado)) {
+      continue;
+    }
     const cnpj = normalizeDigits(lead.cnpj);
     const key = cnpj.length === 14 ? `cnpj:${cnpj}` : `inep:${normalizeDigits(lead.inep_code) || lead.id}`;
     if (!deduped.has(key)) {

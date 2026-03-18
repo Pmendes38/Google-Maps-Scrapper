@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { NextRequest, NextResponse } from "next/server";
 
 import { getServerSupabaseClient } from "@/lib/supabase-server";
@@ -53,7 +55,59 @@ type IneqRow = {
   sg_uf: string | null;
 };
 
+type QEduSyncData = {
+  school: AnyObject | null;
+  censo: AnyObject | null;
+  trRows: AnyObject[];
+  censoAno: number | null;
+  trAno: number | null;
+  dependencia: string | null;
+  dependenciaId: number | null;
+  localizacao: string | null;
+  localizacaoId: number | null;
+  situacaoFuncionamento: string | null;
+  totalMatriculas: number | null;
+  totalProfessores: number | null;
+  totalFuncionarios: number | null;
+  taxaAprovacao: number | null;
+  taxaReprovacao: number | null;
+  taxaAbandono: number | null;
+  etapasEnsino: string[];
+  temInternet: boolean | null;
+  temBiblioteca: boolean | null;
+  temLabInformatica: boolean | null;
+  temLabCiencias: boolean | null;
+  temQuadra: boolean | null;
+  temSalaLeitura: boolean | null;
+  temAcessibilidade: boolean | null;
+  temAuditorio: boolean | null;
+  temCozinha: boolean | null;
+  temBanheiro: boolean | null;
+  hash: string;
+  syncedAt: string;
+};
+
+type QEduCacheRow = {
+  qedu_school: AnyObject | null;
+  qedu_censo: AnyObject | null;
+  qedu_tr: AnyObject | null;
+  dependencia: string | null;
+  localizacao: string | null;
+  situacao_funcionamento: string | null;
+  censo_ano: number | null;
+  tr_ano: number | null;
+  qtd_matriculas: number | null;
+  qtd_professores: number | null;
+  qtd_funcionarios: number | null;
+  taxa_aprovacao: number | null;
+  taxa_reprovacao: number | null;
+  taxa_abandono: number | null;
+  last_synced_at: string | null;
+};
+
 const CNPJ_CACHE_TTL_MS = 10 * 60 * 1000;
+const QEDU_TIMEOUT_MS = 9000;
+const QEDU_BASE_URL = (process.env.QEDU_API_BASE_URL?.trim() || "http://api.qedu.org.br/v1").replace(/\/+$/, "");
 const cnpjCache = new Map<string, { expiresAt: number; data: BrasilApiCnpj | null }>();
 
 function normalizeDigits(value: unknown): string {
@@ -193,6 +247,135 @@ function inferIsPrivateFromTpRede(tpRede: number | null): string {
   return "Indefinido";
 }
 
+function tpRedeToDependencia(tpRede: number | null): string | null {
+  if (tpRede === 1) return "Federal";
+  if (tpRede === 2) return "Estadual";
+  if (tpRede === 3) return "Municipal";
+  if (tpRede === 4) return "Privada";
+  return null;
+}
+
+function dependenciaToIsPrivate(dependencia: string | null): string {
+  const text = String(dependencia ?? "").trim().toLowerCase();
+  if (!text) return "Indefinido";
+  if (text.includes("priv")) return "Sim";
+  if (
+    text.includes("federal") ||
+    text.includes("estadual") ||
+    text.includes("municipal") ||
+    text.includes("public")
+  ) {
+    return "Nao";
+  }
+  return "Indefinido";
+}
+
+function buildRecentYears(startYear: number, count: number): number[] {
+  const years: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    years.push(startYear - i);
+  }
+  return years;
+}
+
+function hashPayload(payload: unknown): string {
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function inferEtapasFromQEduCenso(censo: AnyObject | null): string[] {
+  if (!censo) return [];
+
+  const stages: string[] = [];
+  const appendIf = (value: unknown, label: string) => {
+    const count = toNullableNumber(value) ?? 0;
+    if (count > 0) stages.push(label);
+  };
+
+  appendIf(censo.matriculas_creche, "Creche");
+  appendIf(censo.matriculas_pre_escolar, "Educacao infantil");
+  appendIf(censo.matriculas_anos_iniciais, "Ensino fundamental (anos iniciais)");
+  appendIf(censo.matriculas_anos_finais, "Ensino fundamental (anos finais)");
+  appendIf(censo.matriculas_ensino_medio, "Ensino medio");
+  appendIf(censo.matriculas_eja, "EJA");
+
+  return stages;
+}
+
+function summarizeTaxaRendimento(rows: AnyObject[]): {
+  taxaAprovacao: number | null;
+  taxaReprovacao: number | null;
+  taxaAbandono: number | null;
+} {
+  let weightTotal = 0;
+  let sumAprovacao = 0;
+  let sumReprovacao = 0;
+  let sumAbandono = 0;
+
+  for (const row of rows) {
+    const aprovados = toNullableNumber(row.aprovados);
+    const reprovados = toNullableNumber(row.reprovados);
+    const abandonos = toNullableNumber(row.abandonos);
+
+    if (aprovados === null && reprovados === null && abandonos === null) continue;
+
+    const weight = Math.max(1, toNullableNumber(row.matriculas) ?? 1);
+    weightTotal += weight;
+    sumAprovacao += (aprovados ?? 0) * weight;
+    sumReprovacao += (reprovados ?? 0) * weight;
+    sumAbandono += (abandonos ?? 0) * weight;
+  }
+
+  if (weightTotal <= 0) {
+    return {
+      taxaAprovacao: null,
+      taxaReprovacao: null,
+      taxaAbandono: null,
+    };
+  }
+
+  const round2 = (value: number) => Math.round(value * 100) / 100;
+
+  return {
+    taxaAprovacao: round2(sumAprovacao / weightTotal),
+    taxaReprovacao: round2(sumReprovacao / weightTotal),
+    taxaAbandono: round2(sumAbandono / weightTotal),
+  };
+}
+
+async function fetchQEduList(
+  token: string,
+  path: string,
+  params: Record<string, string | number | null | undefined>,
+): Promise<AnyObject[] | null> {
+  if (!token) return null;
+
+  const url = new URL(`${QEDU_BASE_URL}${path}`);
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  }
+
+  try {
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(QEDU_TIMEOUT_MS),
+    });
+
+    if (!response.ok) return null;
+
+    const payload = toRecord(await response.json());
+    const data = Array.isArray(payload.data) ? payload.data : [];
+    return data.map((item) => toRecord(item));
+  } catch {
+    return null;
+  }
+}
+
 async function fetchEducacaoInep(inepCode: string): Promise<AnyObject | null> {
   const urls = [
     `http://educacao.dadosabertosbr.com/api/escola/${inepCode}`,
@@ -247,6 +430,287 @@ async function fetchBrasilApiCep(cep: string): Promise<CepResponse | null> {
   } catch {
     return null;
   }
+}
+
+async function fetchQEduSyncData(inepCode: string, token: string): Promise<QEduSyncData | null> {
+  if (!inepCode || !token) return null;
+
+  const schoolRows = await fetchQEduList(token, "/escolas", { inep_id: inepCode });
+  const school = schoolRows && schoolRows.length > 0 ? schoolRows[0] : null;
+  if (!school) return null;
+
+  const now = new Date();
+  const censoYears = buildRecentYears(now.getUTCFullYear() - 1, 8);
+  let censo: AnyObject | null = null;
+  let censoAno: number | null = null;
+
+  for (const year of censoYears) {
+    const rows = await fetchQEduList(token, "/censo/escola", { inep_id: inepCode, ano: year });
+    if (rows && rows.length > 0) {
+      censo = rows[0];
+      censoAno = year;
+      break;
+    }
+  }
+
+  const trYears = buildRecentYears(now.getUTCFullYear(), 8);
+  let trRows: AnyObject[] = [];
+  let trAno: number | null = null;
+  const dependenciaId = toNullableNumber(school.dependencia_id);
+
+  for (const year of trYears) {
+    const rows = await fetchQEduList(token, "/indicador/tr/escola", {
+      inep_id: inepCode,
+      ano: year,
+      dependencia_id: dependenciaId,
+    });
+    if (rows && rows.length > 0) {
+      trRows = rows;
+      trAno = year;
+      break;
+    }
+  }
+
+  const trSummary = summarizeTaxaRendimento(trRows);
+
+  const totalMatriculas = [
+    censo?.matriculas_creche,
+    censo?.matriculas_pre_escolar,
+    censo?.matriculas_anos_iniciais,
+    censo?.matriculas_anos_finais,
+    censo?.matriculas_ensino_medio,
+    censo?.matriculas_eja,
+    censo?.matriculas_educacao_especial,
+  ]
+    .map((value) => toNullableNumber(value) ?? 0)
+    .reduce((acc, current) => acc + current, 0);
+
+  const rawPayload = { school, censo, trRows, censoAno, trAno };
+
+  return {
+    school,
+    censo,
+    trRows,
+    censoAno,
+    trAno,
+    dependencia: pickString(school, ["dependencia"]),
+    dependenciaId,
+    localizacao: pickString(school, ["localizacao"]),
+    localizacaoId: toNullableNumber(school.localizacao_id),
+    situacaoFuncionamento: pickString(school, ["situacao_funcionamento"]),
+    totalMatriculas: totalMatriculas > 0 ? totalMatriculas : null,
+    totalProfessores: toNullableNumber(censo?.outros_num_docentes),
+    totalFuncionarios: toNullableNumber(censo?.outros_num_funcionarios),
+    taxaAprovacao: trSummary.taxaAprovacao,
+    taxaReprovacao: trSummary.taxaReprovacao,
+    taxaAbandono: trSummary.taxaAbandono,
+    etapasEnsino: inferEtapasFromQEduCenso(censo),
+    temInternet: censo ? toBoolean(censo.tecnologia_internet) : null,
+    temBiblioteca: censo ? toBoolean(censo.dependencias_biblioteca) : null,
+    temLabInformatica: censo ? toBoolean(censo.dependencias_lab_informatica) : null,
+    temLabCiencias: censo ? toBoolean(censo.dependencias_lab_ciencias) : null,
+    temQuadra: censo ? toBoolean(censo.dependencias_quadra_esportes) : null,
+    temSalaLeitura: censo ? toBoolean(censo.dependencias_sala_leitura) : null,
+    temAcessibilidade: censo ? toBoolean(censo.acessibilidade_escola) : null,
+    temAuditorio: censo ? toBoolean(censo.dependencias_sala_diretora) : null,
+    temCozinha: censo ? toBoolean(censo.dependencias_cozinha) : null,
+    temBanheiro: censo
+      ? toBoolean(censo.dependencias_sanitario_dentro_predio) || toBoolean(censo.dependencias_sanitario_fora_predio)
+      : null,
+    hash: hashPayload(rawPayload),
+    syncedAt: new Date().toISOString(),
+  };
+}
+
+async function readQEduCache(
+  supabase: ReturnType<typeof getServerSupabaseClient>["supabase"],
+  inepCode: string,
+): Promise<QEduCacheRow | null> {
+  if (!supabase || !inepCode) return null;
+
+  const { data } = await supabase
+    .from("school_qedu_profiles")
+    .select("*")
+    .eq("inep_code", inepCode)
+    .maybeSingle();
+
+  if (!data) return null;
+
+  const row = toRecord(data);
+  return {
+    qedu_school: toRecord(row.qedu_school),
+    qedu_censo: toRecord(row.qedu_censo),
+    qedu_tr: toRecord(row.qedu_tr),
+    dependencia: pickString(row, ["dependencia"]),
+    localizacao: pickString(row, ["localizacao"]),
+    situacao_funcionamento: pickString(row, ["situacao_funcionamento"]),
+    censo_ano: toNullableNumber(row.censo_ano),
+    tr_ano: toNullableNumber(row.tr_ano),
+    qtd_matriculas: toNullableNumber(row.qtd_matriculas),
+    qtd_professores: toNullableNumber(row.qtd_professores),
+    qtd_funcionarios: toNullableNumber(row.qtd_funcionarios),
+    taxa_aprovacao: toNullableNumber(row.taxa_aprovacao),
+    taxa_reprovacao: toNullableNumber(row.taxa_reprovacao),
+    taxa_abandono: toNullableNumber(row.taxa_abandono),
+    last_synced_at: pickString(row, ["last_synced_at"]),
+  };
+}
+
+async function persistQEduSync(
+  supabase: ReturnType<typeof getServerSupabaseClient>["supabase"],
+  leadId: string | null,
+  inepCode: string,
+  qedu: QEduSyncData,
+): Promise<void> {
+  if (!supabase || !inepCode) return;
+
+  try {
+    const now = new Date().toISOString();
+    const { data: existing } = await supabase
+      .from("school_qedu_profiles")
+      .select("qedu_hash")
+      .eq("inep_code", inepCode)
+      .maybeSingle();
+
+    if (existing && String(existing.qedu_hash ?? "") === qedu.hash) {
+      await supabase
+        .from("school_qedu_profiles")
+        .update({
+          lead_id: leadId,
+          last_synced_at: qedu.syncedAt,
+        })
+        .eq("inep_code", inepCode);
+      return;
+    }
+
+    let sourceSnapshotId: string | null = null;
+
+    const { data: sourceRows } = await supabase
+      .from("school_source_snapshots")
+      .insert([
+        {
+          source_name: "qedu_api",
+          source_version: "v1",
+          snapshot_mode: "incremental",
+          watermark: `inep:${inepCode}:${now}`,
+          status: "running",
+          metadata: {
+            inep_code: inepCode,
+            created_by: "api_escola_profile",
+          },
+          started_at: now,
+        },
+      ])
+      .select("id")
+      .limit(1);
+
+    if (sourceRows && sourceRows.length > 0) {
+      sourceSnapshotId = String(sourceRows[0].id ?? "") || null;
+    }
+
+    if (sourceSnapshotId) {
+      await supabase.from("school_source_snapshot_items").upsert(
+        [
+          {
+            snapshot_id: sourceSnapshotId,
+            entity_type: "school",
+            entity_id: inepCode,
+            entity_hash: qedu.hash,
+            payload: {
+              school: qedu.school,
+              censo: qedu.censo,
+              trRows: qedu.trRows,
+              censoAno: qedu.censoAno,
+              trAno: qedu.trAno,
+            },
+          },
+        ],
+        { onConflict: "snapshot_id,entity_type,entity_id" },
+      );
+    }
+
+    await supabase.from("school_qedu_profiles").upsert(
+      {
+        lead_id: leadId,
+        inep_code: inepCode,
+        source_snapshot_id: sourceSnapshotId,
+        qedu_hash: qedu.hash,
+        qedu_school: qedu.school ?? {},
+        qedu_censo: qedu.censo ?? {},
+        qedu_tr: { rows: qedu.trRows },
+        qedu_raw: {
+          school: qedu.school,
+          censo: qedu.censo,
+          trRows: qedu.trRows,
+          censoAno: qedu.censoAno,
+          trAno: qedu.trAno,
+        },
+        dependencia_id: qedu.dependenciaId,
+        dependencia: qedu.dependencia,
+        localizacao_id: qedu.localizacaoId,
+        localizacao: qedu.localizacao,
+        situacao_funcionamento: qedu.situacaoFuncionamento,
+        censo_ano: qedu.censoAno,
+        tr_ano: qedu.trAno,
+        qtd_matriculas: qedu.totalMatriculas,
+        qtd_professores: qedu.totalProfessores,
+        qtd_funcionarios: qedu.totalFuncionarios,
+        taxa_aprovacao: qedu.taxaAprovacao,
+        taxa_reprovacao: qedu.taxaReprovacao,
+        taxa_abandono: qedu.taxaAbandono,
+        last_synced_at: qedu.syncedAt,
+      },
+      { onConflict: "inep_code" },
+    );
+
+    if (sourceSnapshotId) {
+      await supabase
+        .from("school_source_snapshots")
+        .update({
+          status: "completed",
+          records_read: 1,
+          records_changed: 1,
+          records_upserted: 1,
+          finished_at: new Date().toISOString(),
+        })
+        .eq("id", sourceSnapshotId);
+    }
+  } catch {
+    // Ignore persistence errors to keep profile endpoint resilient.
+  }
+}
+
+async function syncLeadWithQEdu(
+  supabase: ReturnType<typeof getServerSupabaseClient>["supabase"],
+  leadId: string | null,
+  qedu: QEduSyncData,
+): Promise<void> {
+  if (!supabase || !leadId) return;
+
+  const patch: Record<string, unknown> = {
+    enriched_at: qedu.syncedAt,
+    updated_at: qedu.syncedAt,
+  };
+
+  if (qedu.totalMatriculas !== null) patch.total_matriculas = qedu.totalMatriculas;
+  if (qedu.temInternet !== null) patch.tem_internet = qedu.temInternet;
+  if (qedu.temLabInformatica !== null) patch.tem_lab_informatica = qedu.temLabInformatica;
+
+  if (qedu.school) {
+    const city = pickString(qedu.school, ["cidade", "municipio"]);
+    const state = pickString(qedu.school, ["sigla", "uf"]);
+    const address = pickString(qedu.school, ["endereco"]);
+    const bairro = pickString(qedu.school, ["bairro"]);
+    const cep = normalizeDigits(qedu.school.cep);
+
+    if (city) patch.city = city;
+    if (state) patch.state = state;
+    if (address) patch.address = address;
+    if (bairro) patch.bairro = bairro;
+    if (cep.length === 8) patch.cep = cep;
+  }
+
+  await supabase.from("school_leads").update(patch).eq("id", leadId);
 }
 
 async function findLeadByIdentifier(
@@ -317,12 +781,36 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     return NextResponse.json({ error: "Escola não encontrada na base" }, { status: 404 });
   }
 
+  const leadId = String(lead?.id ?? "").trim() || null;
   const inepCode = String(lead?.inep_code ?? inepFallback?.co_entidade ?? "").trim();
   const cnpjDigits = normalizeDigits(lead?.cnpj ?? inepFallback?.cnpj ?? identifier);
 
+  const qeduCache = inepCode ? await readQEduCache(supabase, inepCode) : null;
+  let qedu: QEduSyncData | null = null;
+  let qeduStatus: EscolaProfile["qedu_status"] = qeduCache ? "cache" : "unavailable";
+
+  const qeduToken = String(process.env.QEDU_API_KEY ?? "").trim();
+  if (inepCode && qeduToken) {
+    qedu = await fetchQEduSyncData(inepCode, qeduToken);
+    if (qedu) {
+      qeduStatus = "live";
+      await persistQEduSync(supabase, leadId, inepCode, qedu);
+      await syncLeadWithQEdu(supabase, leadId, qedu);
+    }
+  }
+
+  const qeduSchool = qedu?.school ?? qeduCache?.qedu_school ?? null;
+  const qeduCenso = qedu?.censo ?? qeduCache?.qedu_censo ?? null;
+  const qeduDependencia = qedu?.dependencia ?? qeduCache?.dependencia ?? null;
+  const qeduLocalizacao = qedu?.localizacao ?? qeduCache?.localizacao ?? null;
+  const qeduSituacao = qedu?.situacaoFuncionamento ?? qeduCache?.situacao_funcionamento ?? null;
+  const qeduEtapas = qedu?.etapasEnsino ?? inferEtapasFromQEduCenso(qeduCenso);
+
   const educacaoData = inepCode ? await fetchEducacaoInep(inepCode) : null;
   const cnpjData = cnpjDigits.length === 14 ? await fetchBrasilApiCnpj(cnpjDigits) : null;
-  const cepDigits = normalizeDigits(lead?.cep ?? cnpjData?.cep ?? pickString(educacaoData, ["cep", "endereco.cep"]));
+  const cepDigits = normalizeDigits(
+    lead?.cep ?? cnpjData?.cep ?? qeduSchool?.cep ?? pickString(educacaoData, ["cep", "endereco.cep"]),
+  );
   const cepData = await fetchBrasilApiCep(cepDigits);
 
   const dataAbertura =
@@ -331,12 +819,14 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
   const lat =
     toNullableNumber(lead?.latitude) ??
     toNullableNumber(lead?.cep_lat) ??
+    toNullableNumber(qeduSchool?.lat) ??
     pickNumber(educacaoData, ["latitude", "lat", "coordenadas.latitude", "gps.latitude"]) ??
     toNullableNumber(cepData?.location?.coordinates?.latitude);
 
   const lng =
     toNullableNumber(lead?.longitude) ??
     toNullableNumber(lead?.cep_lng) ??
+    toNullableNumber(qeduSchool?.long) ??
     pickNumber(educacaoData, ["longitude", "lng", "coordenadas.longitude", "gps.longitude"]) ??
     toNullableNumber(cepData?.location?.coordinates?.longitude);
 
@@ -347,6 +837,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     name:
       String(
         lead?.name ??
+          pickString(qeduSchool, ["nome"]) ??
           inepFallback?.no_entidade ??
           cnpjData?.nome_fantasia ??
           cnpjData?.razao_social ??
@@ -356,21 +847,35 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     inep_code: inepCode || normalizeDigits(identifier),
     cnpj: cnpjDigits || "",
     school_segment: String(lead?.school_segment ?? inferSegmentFromInep(inepFallback)),
-    is_private: String(lead?.is_private ?? inferIsPrivateFromTpRede(inepFallback?.tp_rede ?? null)),
+    is_private: String(
+      lead?.is_private ??
+        dependenciaToIsPrivate(qeduDependencia) ??
+        inferIsPrivateFromTpRede(inepFallback?.tp_rede ?? null),
+    ),
     pipeline_stage: String(lead?.pipeline_stage ?? "Novo"),
+    dependencia_administrativa: qeduDependencia ?? tpRedeToDependencia(inepFallback?.tp_rede ?? null),
+    situacao_funcionamento: qeduSituacao,
     ai_score: toNullableNumber(lead?.ai_score),
     icp_match: String(lead?.icp_match ?? "").trim() || null,
     abordagem_sugerida: String(lead?.abordagem_sugerida ?? "").trim() || null,
     pain_points: Array.isArray(lead?.pain_points)
       ? (lead?.pain_points?.map((item) => String(item)) as string[])
       : null,
-    phone_formatted: String(lead?.phone_formatted ?? "").trim() || null,
+    phone_formatted:
+      String(lead?.phone_formatted ?? "").trim() ||
+      (() => {
+        const ddd = String(qeduSchool?.ddd ?? "").trim();
+        const phone = normalizeDigits(qeduSchool?.telefone);
+        if (!ddd || !phone) return null;
+        return `+55${ddd}${phone}`;
+      })(),
     website: String(lead?.website ?? "").trim() || null,
-    email: String(lead?.email ?? cnpjData?.email ?? "").trim() || null,
+    email: String(lead?.email ?? cnpjData?.email ?? qeduSchool?.email ?? "").trim() || null,
     address:
       String(
         lead?.address ??
           cnpjData?.logradouro ??
+          pickString(qeduSchool, ["endereco"]) ??
           pickString(educacaoData, ["endereco.logradouro", "logradouro"]) ??
           cepData?.street ??
           "",
@@ -379,6 +884,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       String(
         lead?.bairro ??
           cnpjData?.bairro ??
+          pickString(qeduSchool, ["bairro"]) ??
           pickString(educacaoData, ["endereco.bairro", "bairro"]) ??
           cepData?.neighborhood ??
           "",
@@ -386,6 +892,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     city:
       String(
         lead?.city ??
+          pickString(qeduSchool, ["cidade", "municipio"]) ??
           inepFallback?.no_municipio ??
           cnpjData?.municipio ??
           pickString(educacaoData, ["municipio", "cidade", "endereco.municipio"]) ??
@@ -395,6 +902,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     state:
       String(
         lead?.state ??
+          pickString(qeduSchool, ["sigla", "uf"]) ??
           inepFallback?.sg_uf ??
           cnpjData?.uf ??
           pickString(educacaoData, ["uf", "estado", "endereco.uf"]) ??
@@ -405,15 +913,22 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     lat,
     lng,
     total_matriculas:
+      qedu?.totalMatriculas ??
+      qeduCache?.qtd_matriculas ??
       pickNumber(educacaoData, ["qtdAlunos", "total_alunos", "alunos.total", "matriculas.total"]) ??
       toNullableNumber(lead?.total_matriculas) ??
       toNullableNumber(inepFallback?.qt_mat_bas),
-    total_professores: pickNumber(educacaoData, ["qtdProfessores", "total_professores", "professores"]),
+    total_professores:
+      qedu?.totalProfessores ??
+      qeduCache?.qtd_professores ??
+      pickNumber(educacaoData, ["qtdProfessores", "total_professores", "professores"]),
     total_funcionarios:
+      qedu?.totalFuncionarios ??
+      qeduCache?.qtd_funcionarios ??
       pickNumber(educacaoData, ["qtdFuncionarios", "total_funcionarios", "funcionarios"]) ?? null,
-    localizacao: normalizeLocalizacao(
-      pickFirst(educacaoData, ["localizacao", "tipoLocalizacao", "tp_localizacao"]),
-    ),
+    localizacao:
+      normalizeLocalizacao(qeduLocalizacao) ??
+      normalizeLocalizacao(pickFirst(educacaoData, ["localizacao", "tipoLocalizacao", "tp_localizacao"])),
     ideb_ai:
       pickNumber(educacaoData, ["ideb.ai", "idebAnosIniciais", "nu_ideb_ai"]) ??
       toNullableNumber(lead?.ideb_ai) ??
@@ -422,28 +937,62 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       pickNumber(educacaoData, ["ideb.af", "idebAnosFinais", "nu_ideb_af"]) ??
       toNullableNumber(lead?.ideb_af) ??
       toNullableNumber(inepFallback?.nu_ideb_af),
-    taxa_aprovacao: pickNumber(educacaoData, ["taxaAprovacao", "rendimento.aprovacao", "aprovacao"]),
-    taxa_reprovacao: pickNumber(educacaoData, ["taxaReprovacao", "rendimento.reprovacao", "reprovacao"]),
-    taxa_abandono: pickNumber(educacaoData, ["taxaAbandono", "rendimento.abandono", "abandono"]),
-    etapas_ensino: normalizeEtapas(
-      pickFirst(educacaoData, ["etapasEnsino", "etapas_ensino", "etapas", "ofertaEtapas"]),
-    ),
+    taxa_aprovacao:
+      qedu?.taxaAprovacao ??
+      qeduCache?.taxa_aprovacao ??
+      pickNumber(educacaoData, ["taxaAprovacao", "rendimento.aprovacao", "aprovacao"]),
+    taxa_reprovacao:
+      qedu?.taxaReprovacao ??
+      qeduCache?.taxa_reprovacao ??
+      pickNumber(educacaoData, ["taxaReprovacao", "rendimento.reprovacao", "reprovacao"]),
+    taxa_abandono:
+      qedu?.taxaAbandono ??
+      qeduCache?.taxa_abandono ??
+      pickNumber(educacaoData, ["taxaAbandono", "rendimento.abandono", "abandono"]),
+    qedu_status: qeduStatus,
+    qedu_last_sync_at: qedu?.syncedAt ?? qeduCache?.last_synced_at ?? null,
+    qedu_censo_ano: qedu?.censoAno ?? qeduCache?.censo_ano ?? null,
+    qedu_tr_ano: qedu?.trAno ?? qeduCache?.tr_ano ?? null,
+    etapas_ensino:
+      qeduEtapas.length > 0
+        ? qeduEtapas
+        : normalizeEtapas(pickFirst(educacaoData, ["etapasEnsino", "etapas_ensino", "etapas", "ofertaEtapas"])),
     tem_internet:
+      (qedu?.temInternet ?? toBoolean(qeduCenso?.tecnologia_internet)) ||
       pickBoolean(infraNode, ["internet", "temInternet", "in_internet"]) ||
       toBoolean(lead?.tem_internet) ||
       toBoolean(inepFallback?.in_internet),
-    tem_biblioteca: pickBoolean(infraNode, ["biblioteca", "temBiblioteca", "in_biblioteca"]),
+    tem_biblioteca:
+      (qedu?.temBiblioteca ?? toBoolean(qeduCenso?.dependencias_biblioteca)) ||
+      pickBoolean(infraNode, ["biblioteca", "temBiblioteca", "in_biblioteca"]),
     tem_lab_informatica:
+      (qedu?.temLabInformatica ?? toBoolean(qeduCenso?.dependencias_lab_informatica)) ||
       pickBoolean(infraNode, ["laboratorioInformatica", "temLabInformatica", "in_lab_informatica"]) ||
       toBoolean(lead?.tem_lab_informatica) ||
       toBoolean(inepFallback?.in_lab_informatica),
-    tem_lab_ciencias: pickBoolean(infraNode, ["laboratorioCiencias", "temLabCiencias", "in_lab_ciencias"]),
-    tem_quadra: pickBoolean(infraNode, ["quadraEsportes", "temQuadra", "in_quadra_esportes"]),
-    tem_sala_leitura: pickBoolean(infraNode, ["salaLeitura", "temSalaLeitura", "in_sala_leitura"]),
-    tem_acessibilidade: pickBoolean(infraNode, ["acessibilidade", "temAcessibilidade", "in_acessibilidade"]),
-    tem_auditorio: pickBoolean(infraNode, ["auditorio", "temAuditorio", "in_auditorio"]),
-    tem_cozinha: pickBoolean(infraNode, ["cozinha", "temCozinha", "in_cozinha"]),
-    tem_banheiro: pickBoolean(infraNode, ["banheiro", "temBanheiro", "in_banheiro"]),
+    tem_lab_ciencias:
+      (qedu?.temLabCiencias ?? toBoolean(qeduCenso?.dependencias_lab_ciencias)) ||
+      pickBoolean(infraNode, ["laboratorioCiencias", "temLabCiencias", "in_lab_ciencias"]),
+    tem_quadra:
+      (qedu?.temQuadra ?? toBoolean(qeduCenso?.dependencias_quadra_esportes)) ||
+      pickBoolean(infraNode, ["quadraEsportes", "temQuadra", "in_quadra_esportes"]),
+    tem_sala_leitura:
+      (qedu?.temSalaLeitura ?? toBoolean(qeduCenso?.dependencias_sala_leitura)) ||
+      pickBoolean(infraNode, ["salaLeitura", "temSalaLeitura", "in_sala_leitura"]),
+    tem_acessibilidade:
+      (qedu?.temAcessibilidade ?? toBoolean(qeduCenso?.acessibilidade_escola)) ||
+      pickBoolean(infraNode, ["acessibilidade", "temAcessibilidade", "in_acessibilidade"]),
+    tem_auditorio:
+      (qedu?.temAuditorio ?? toBoolean(qeduCenso?.dependencias_sala_diretora)) ||
+      pickBoolean(infraNode, ["auditorio", "temAuditorio", "in_auditorio"]),
+    tem_cozinha:
+      (qedu?.temCozinha ?? toBoolean(qeduCenso?.dependencias_cozinha)) ||
+      pickBoolean(infraNode, ["cozinha", "temCozinha", "in_cozinha"]),
+    tem_banheiro:
+      (qedu?.temBanheiro ??
+        (toBoolean(qeduCenso?.dependencias_sanitario_dentro_predio) ||
+          toBoolean(qeduCenso?.dependencias_sanitario_fora_predio))) ||
+      pickBoolean(infraNode, ["banheiro", "temBanheiro", "in_banheiro"]),
     qtd_salas_aula: pickNumber(educacaoData, ["qtdSalasAula", "salasAula", "salas_aula"]),
     razao_social: String(cnpjData?.razao_social ?? lead?.razao_social ?? "").trim() || null,
     capital_social: toNullableNumber(cnpjData?.capital_social) ?? toNullableNumber(lead?.capital_social),

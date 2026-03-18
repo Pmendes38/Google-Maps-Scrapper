@@ -46,6 +46,16 @@ function formatDate(value: string | null): string {
   return new Intl.DateTimeFormat("pt-BR").format(date);
 }
 
+function formatDateTime(value: string | null): string {
+  if (!value) return "Nao sincronizado";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(date);
+}
+
 function scoreColor(score: number | null): string {
   const value = score ?? 0;
   if (value >= 65) return "bg-emerald-400";
@@ -73,6 +83,12 @@ function scorePercent(value: number | null): number {
 function isPositiveStatus(value: string | null): boolean {
   const text = String(value ?? "").toLowerCase();
   return text.includes("ativa") || text.includes("ativo");
+}
+
+function qeduStatusLabel(status: EscolaProfile["qedu_status"]): string {
+  if (status === "live") return "QEdu ao vivo";
+  if (status === "cache") return "QEdu em cache";
+  return "QEdu indisponivel";
 }
 
 type InfraIcon =
@@ -347,7 +363,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
             className="mt-4 inline-flex rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/15"
             href="/buscar"
           >
-            ← Voltar para busca
+            Voltar para busca
           </Link>
         </div>
       </main>
@@ -391,7 +407,10 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
                   {profile.name}
                 </h1>
                 <p className="mt-1 font-[var(--font-manrope)] text-[13px] text-white/55">
-                  INEP: {profile.inep_code || "Nao informado"} · {profile.city ?? "-"}/{profile.state ?? "-"}
+                  INEP: {profile.inep_code || "Nao informado"} | {profile.city ?? "-"}/{profile.state ?? "-"}
+                </p>
+                <p className="mt-1 font-[var(--font-manrope)] text-[12px] text-white/45">
+                  {qeduStatusLabel(profile.qedu_status)} · ultimo sync {formatDateTime(profile.qedu_last_sync_at)}
                 </p>
 
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -399,10 +418,10 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
                     {profile.school_segment}
                   </span>
                   <span className="rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-xs font-medium">
-                    {profile.is_private === "Sim" ? "Privada" : "Publica"}
+                    {profile.dependencia_administrativa ?? (profile.is_private === "Sim" ? "Privada" : "Publica")}
                   </span>
                   <span className="rounded-full border border-emerald-300/40 bg-emerald-300/20 px-2.5 py-1 text-xs font-medium text-emerald-100">
-                    {isPositiveStatus(profile.situacao_cadastral) ? "Ativa" : "Status nao confirmado"}
+                    {profile.situacao_funcionamento ?? (isPositiveStatus(profile.situacao_cadastral) ? "Ativa" : "Status nao confirmado")}
                   </span>
                 </div>
 
@@ -412,7 +431,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
                       className="rounded-xl border border-white/25 bg-white/10 px-3 py-1.5 text-sm font-medium transition hover:bg-white/20"
                       href={`tel:${profile.phone_formatted}`}
                     >
-                      📞 Ligar
+                      Ligar
                     </a>
                   )}
                   {profile.website && (
@@ -422,7 +441,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
                       rel="noreferrer"
                       target="_blank"
                     >
-                      🌐 Site
+                      Site
                     </a>
                   )}
                 </div>
@@ -473,22 +492,22 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <article className="rounded-xl border border-[#BF00FF]/20 bg-[#1b1027] p-4">
-            <p className="text-2xl">👥</p>
+            <p className="text-2xl">Pessoas</p>
             <p className="mt-2 text-2xl font-bold">{formatNumber(profile.total_matriculas)}</p>
             <p className="text-xs text-white/60">Matriculas</p>
           </article>
           <article className="rounded-xl border border-[#BF00FF]/20 bg-[#1b1027] p-4">
-            <p className="text-2xl">👨‍🏫</p>
+            <p className="text-2xl">Prof.</p>
             <p className="mt-2 text-2xl font-bold">{formatNumber(profile.total_professores)}</p>
             <p className="text-xs text-white/60">Professores</p>
           </article>
           <article className="rounded-xl border border-[#BF00FF]/20 bg-[#1b1027] p-4">
-            <p className="text-2xl">📅</p>
+            <p className="text-2xl">Tempo</p>
             <p className="mt-2 text-2xl font-bold">{profile.anos_operacao ?? "-"}</p>
             <p className="text-xs text-white/60">Anos operando</p>
           </article>
           <article className="rounded-xl border border-[#BF00FF]/20 bg-[#1b1027] p-4">
-            <p className="text-2xl">💰</p>
+            <p className="text-2xl">Capital</p>
             <p className="mt-2 text-2xl font-bold">{formatCurrency(profile.capital_social)}</p>
             <p className="text-xs text-white/60">Capital social</p>
           </article>
@@ -524,7 +543,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
                   </div>
                 </div>
               </div>
-              <p className="mt-4 text-xs text-white/45">Fonte: INEP · Censo Escolar 2025</p>
+              <p className="mt-4 text-xs text-white/45">Fonte: INEP | Censo Escolar 2025</p>
             </article>
 
             <article className="rounded-xl border border-white/15 bg-[#130a1d] p-5">
@@ -630,7 +649,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
                 {profile.socios.slice(0, 3).map((socio) => (
                   <div className="rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm" key={`${socio.nome}-${socio.qualificacao}`}>
                     <strong>{socio.nome}</strong>
-                    <span className="text-white/60"> · {socio.qualificacao}</span>
+                    <span className="text-white/60"> | {socio.qualificacao}</span>
                   </div>
                 ))}
               </div>
@@ -639,7 +658,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
         )}
 
         <section className="rounded-xl border border-[#BF00FF]/30 bg-[rgba(191,0,255,0.08)] p-5">
-          <h2 className="font-[var(--font-outfit)] text-xl font-semibold text-[#BF00FF]">✦ Analise Wayzen</h2>
+          <h2 className="font-[var(--font-outfit)] text-xl font-semibold text-[#BF00FF]">Analise Wayzen</h2>
 
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <div>
@@ -717,7 +736,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
             className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium hover:bg-white/20"
             href="/buscar"
           >
-            ← Voltar para busca
+            Voltar para busca
           </Link>
 
           <button
@@ -736,7 +755,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
               rel="noreferrer"
               target="_blank"
             >
-              🔗 Ver no Google Maps
+              Ver no Google Maps
             </a>
           )}
         </footer>
