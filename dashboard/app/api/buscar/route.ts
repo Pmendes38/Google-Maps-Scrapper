@@ -90,17 +90,45 @@ function normalizeDigits(value: unknown): string {
 }
 
 function normalizeText(value: unknown): string {
-  return String(value ?? "")
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const fixed = raw.includes("Ã") || raw.includes("Â") ? Buffer.from(raw, "latin1").toString("utf8") : raw;
+
+  return fixed
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9]/g, "")
     .trim()
     .toUpperCase();
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a) return b.length;
+  if (!b) return a.length;
+
+  const dp: number[] = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const temp = dp[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
+      prev = temp;
+    }
+  }
+  return dp[b.length];
 }
 
 function sameCity(left: unknown, right: unknown): boolean {
   const leftNormalized = normalizeText(left);
   const rightNormalized = normalizeText(right);
-  return Boolean(leftNormalized) && leftNormalized === rightNormalized;
+  if (!leftNormalized || !rightNormalized) return false;
+  if (leftNormalized === rightNormalized) return true;
+  if (leftNormalized.startsWith(rightNormalized) || rightNormalized.startsWith(leftNormalized)) return true;
+  if (leftNormalized.slice(0, 4) !== rightNormalized.slice(0, 4)) return false;
+  return levenshteinDistance(leftNormalized, rightNormalized) <= 2;
 }
 
 function sameState(left: unknown, right: unknown): boolean {
