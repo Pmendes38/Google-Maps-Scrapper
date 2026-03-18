@@ -1,12 +1,21 @@
 import type { Metadata } from "next";
-import { Manrope, Outfit } from "next/font/google";
+import localFont from "next/font/local";
 import Image from "next/image";
 import Link from "next/link";
 
 import "./globals.css";
 
-const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
-const manrope = Manrope({ subsets: ["latin"], variable: "--font-manrope" });
+const outfit = localFont({
+  src: "../public/assets/fonts/NeuePower-Ultra.ttf",
+  variable: "--font-outfit",
+  display: "swap",
+});
+
+const manrope = localFont({
+  src: "../public/assets/fonts/Manrope-VariableFont_wght.ttf",
+  variable: "--font-manrope",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Wayzen School Intelligence",
