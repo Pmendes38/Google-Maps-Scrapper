@@ -77,6 +77,10 @@ const MIN_INEP_RESULTS = 30;
 const MAX_SEARCH_RESULTS = 80;
 const MAX_FALLBACK_PAGES = 5;
 
+function escapeIlikeValue(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}
+
 function normalizeDigits(value: unknown): string {
   return String(value ?? "").replace(/\D/g, "");
 }
@@ -87,6 +91,27 @@ function normalizeText(value: unknown): string {
     .replace(/[\u0300-\u036f]/g, "")
     .trim()
     .toUpperCase();
+}
+
+function sameCity(left: unknown, right: unknown): boolean {
+  const leftNormalized = normalizeText(left);
+  const rightNormalized = normalizeText(right);
+  return Boolean(leftNormalized) && leftNormalized === rightNormalized;
+}
+
+function sameState(left: unknown, right: unknown): boolean {
+  const leftNormalized = normalizeText(left);
+  const rightNormalized = normalizeText(right);
+  return Boolean(leftNormalized) && leftNormalized === rightNormalized;
+}
+
+function buildCitySearchTerms(city: string): string[] {
+  const raw = String(city ?? "").trim();
+  if (!raw) return [];
+
+  const normalized = normalizeText(raw);
+  const terms = new Set<string>([raw, normalized]);
+  return Array.from(terms).filter(Boolean);
 }
 
 function parseNumber(value: unknown): number {
@@ -504,18 +529,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: clientError }, { status: 500 });
   }
 
-  const { data, error } = await supabase
-    .from("inep_schools")
-    .select("*")
-    .eq("sg_uf", estado)
-    .ilike("no_municipio", `%${cidade}%`)
-    .limit(500);
+  const cityTerms = buildCitySearchTerms(cidade);
+  let inepQuery = supabase.from("inep_schools").select("*").eq("sg_uf", estado).limit(1500);
+
+  if (cityTerms.length === 1) {
+    inepQuery = inepQuery.ilike("no_municipio", `%${escapeIlikeValue(cityTerms[0])}%`);
+  } else if (cityTerms.length > 1) {
+    const filters = cityTerms.map((term) => `no_municipio.ilike.%${escapeIlikeValue(term)}%`).join(",");
+    inepQuery = inepQuery.or(filters);
+  }
+
+  const { data, error } = await inepQuery;
 
   if (error) {
     return NextResponse.json({ error: `Falha ao consultar INEP: ${error.message}` }, { status: 500 });
   }
 
-  const inepRows = ((data ?? []) as IneqRow[]).filter((row) => matchesSegment(row, cnae));
+  const inepRows = ((data ?? []) as IneqRow[]).filter(
+    (row) => matchesSegment(row, cnae) && sameCity(row.no_municipio, cidade),
+  );
   const candidatesByKey = new Map<string, CandidateLead>();
   const cnpjToInepRow = new Map<string, IneqRow>();
 
@@ -550,6 +582,10 @@ export async function POST(request: NextRequest) {
       fallbackCompanies = await fetchMinhaReceitaDiscovery(cidade, estado, cnae);
     }
   }
+
+  fallbackCompanies = fallbackCompanies.filter(
+    (company) => sameCity(company.municipio, cidade) && sameState(company.uf, estado),
+  );
 
   if (fallbackCompanies.length > 0) {
     await createSourceSnapshot(
