@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Manrope, Outfit } from "next/font/google";
+import Image from "next/image";
 import Link from "next/link";
 
 import "./globals.css";
@@ -10,6 +11,16 @@ const manrope = Manrope({ subsets: ["latin"], variable: "--font-manrope" });
 export const metadata: Metadata = {
   title: "Wayzen School Intelligence",
   description: "Plataforma de inteligencia comercial para escolas brasileiras",
+  icons: {
+    icon: [
+      { url: "/favicon/favicon.ico" },
+      { url: "/favicon/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon/favicon-96x96.png", sizes: "96x96", type: "image/png" },
+    ],
+    apple: "/favicon/apple-touch-icon.png",
+    shortcut: "/favicon/favicon.ico",
+  },
+  manifest: "/favicon/site.webmanifest",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -19,12 +30,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <header className="sticky top-0 z-40 border-b border-[var(--wayzen-border)] bg-[rgba(20,20,20,0.92)] backdrop-blur-md">
           <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 md:px-6">
             <Link className="flex items-center gap-3" href="/">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--wayzen-purple)] to-[var(--wayzen-magenta)] font-[var(--font-outfit)] text-lg font-bold text-white">
-                W
-              </span>
-              <span className="font-[var(--font-outfit)] text-base font-semibold tracking-wide text-white md:text-lg">
-                Wayzen School Intelligence
-              </span>
+              <Image
+                src="/assets/logo-wayzen.png"
+                alt="Wayzen"
+                width={172}
+                height={48}
+                className="h-10 w-auto"
+                priority
+              />
             </Link>
             <nav className="flex flex-wrap items-center gap-2 text-sm">
               <Link
