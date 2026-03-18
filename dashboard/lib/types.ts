@@ -65,6 +65,8 @@ export interface SchoolLead {
   notes: string | null;
   next_action: string | null;
   source: string;
+  source_discovery?: "inep" | "minha_receita" | "cnpjws";
+  source_company?: "brasilapi" | "opencnpj" | "minha_receita" | "cnpjws" | "none";
   data_quality: number | null;
   scraped_at: string | null;
   created_at: string;

@@ -28,6 +28,7 @@ type CompanyData = {
   telefone_1?: string;
   descricao_porte?: string;
   descricao_situacao_cadastral?: string;
+  situacao_cadastral?: string;
   website?: string;
   site?: string;
   url?: string;
@@ -40,6 +41,7 @@ type CompanyData = {
   cnae_fiscal?: number | string;
   cnae_fiscal_descricao?: string;
   data_inicio_atividade?: string;
+  abertura?: string;
   municipio?: string;
   uf?: string;
   logradouro?: string;
@@ -58,6 +60,22 @@ type CepResponse = {
     };
   };
 };
+
+type MinhaReceitaPage = {
+  data?: CompanyData[];
+  cursor?: string | null;
+};
+
+type CandidateLead = {
+  inepRow: IneqRow | null;
+  seedCompany: CompanyData | null;
+  sourceDiscovery: "inep" | "minha_receita" | "cnpjws";
+};
+
+const DISCOVERY_PROVIDER = (process.env.DISCOVERY_PROVIDER ?? "inep_minha_receita").toLowerCase();
+const MIN_INEP_RESULTS = 30;
+const MAX_SEARCH_RESULTS = 80;
+const MAX_FALLBACK_PAGES = 5;
 
 function normalizeDigits(value: unknown): string {
   return String(value ?? "").replace(/\D/g, "");
@@ -84,7 +102,6 @@ function parseNumber(value: unknown): number {
   const hasComma = text.includes(",");
 
   if (hasDot && hasComma) {
-    // pt-BR style: 50.000,00 -> 50000.00
     text = text.replace(/\./g, "").replace(",", ".");
   } else if (hasComma) {
     text = /,\d{1,2}$/.test(text) ? text.replace(",", ".") : text.replace(/,/g, "");
@@ -150,6 +167,16 @@ async function fetchBrasilApiCnpj(cnpj: string): Promise<CompanyData | null> {
   }
 }
 
+async function fetchOpenCnpj(cnpj: string): Promise<CompanyData | null> {
+  try {
+    const resp = await fetch(`https://api.opencnpj.org/${cnpj}`, { cache: "no-store" });
+    if (!resp.ok) return null;
+    return (await resp.json()) as CompanyData;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchCep(cep: string): Promise<CepResponse | null> {
   const clean = normalizeDigits(cep);
   if (clean.length !== 8) return null;
@@ -172,7 +199,7 @@ function extractPorte(data: CompanyData | null): string {
 }
 
 function extractDataAbertura(data: CompanyData | null): string | null {
-  const value = String(data?.data_inicio_atividade ?? "").trim();
+  const value = String(data?.data_inicio_atividade ?? data?.abertura ?? "").trim();
   return value || null;
 }
 
@@ -186,20 +213,13 @@ function extractPhoneDigits(data: CompanyData | null): string {
     return dddPhone;
   }
   const composed = `${data?.ddd_telefone_1 ?? ""}${data?.telefone_1 ?? ""}`;
-  const digits = normalizeDigits(composed);
-  return digits;
+  return normalizeDigits(composed);
 }
 
 function extractWebsite(data: CompanyData | null): string | null {
-  const candidates = [
-    data?.website,
-    data?.site,
-    data?.url,
-    data?.dominio,
-  ]
+  const candidates = [data?.website, data?.site, data?.url, data?.dominio]
     .map((v) => String(v ?? "").trim())
     .filter(Boolean);
-
   const found = candidates.find((value) => value.includes("http") || value.includes("www."));
   return found || null;
 }
@@ -234,7 +254,20 @@ function getCnaeScore(companyCnae: string, requestedCnae: string): number {
   return 0;
 }
 
-function scoreHeuristic(data: CompanyData | null, requestedCnae: string): { score: number; icp: ICPMatch } {
+function getMatriculasScore(totalMatriculas: number | null): number {
+  const total = Number(totalMatriculas ?? 0);
+  if (total >= 1000) return 25;
+  if (total >= 500) return 18;
+  if (total >= 100) return 10;
+  if (total >= 1) return 3;
+  return 0;
+}
+
+function scoreHeuristic(
+  data: CompanyData | null,
+  requestedCnae: string,
+  totalMatriculas: number | null,
+): { score: number; icp: ICPMatch } {
   let score = 0;
 
   const capital = extractCapitalSocial(data);
@@ -253,16 +286,19 @@ function scoreHeuristic(data: CompanyData | null, requestedCnae: string): { scor
   const phone = extractPhoneDigits(data);
   if (phone) score += 15;
 
+  score += getMatriculasScore(totalMatriculas);
+  score = Math.min(100, score);
+
   const icp: ICPMatch = score >= 65 ? "alto" : score >= 40 ? "medio" : "baixo";
   return { score, icp };
 }
 
 function suggestedApproach(score: number): string {
   if (score >= 65) {
-    return "Escola com porte e estrutura para investir em processo comercial. Abordagem direta ao diretor sobre captação de alunos.";
+    return "Escola com porte e estrutura para investir em processo comercial. Abordagem direta ao diretor sobre captacao de alunos.";
   }
   if (score >= 40) {
-    return "Escola em crescimento com potencial. Apresentar case de resultado e proposta de diagnóstico gratuito.";
+    return "Escola em crescimento com potencial. Apresentar case de resultado e proposta de diagnostico gratuito.";
   }
   return "Escola menor ou com dados incompletos. Qualificar por telefone antes de proposta formal.";
 }
@@ -273,15 +309,184 @@ function isPrivateFromTpRede(tpRede: number | null): "Sim" | "Nao" | "Indefinido
   return "Indefinido";
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function mapPorteToLead(porte: string): "ME" | "EPP" | "Demais" | null {
   if (porte === "ME" || porte.includes("MICRO EMPRESA")) return "ME";
   if (porte === "EPP" || porte.includes("EMPRESA DE PEQUENO PORTE")) return "EPP";
   if (porte === "DEMAIS") return "Demais";
   return null;
+}
+
+async function fetchMinhaReceitaPage(
+  cidade: string,
+  estado: string,
+  cnae: string,
+  cursor?: string,
+): Promise<MinhaReceitaPage | null> {
+  const params = new URLSearchParams({
+    municipio: cidade,
+    uf: estado,
+    cnae_fiscal: cnae,
+  });
+  if (cursor) {
+    params.set("cursor", cursor);
+  }
+
+  try {
+    const response = await fetch(`https://minhareceita.org/?${params.toString()}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    return (await response.json()) as MinhaReceitaPage;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchMinhaReceitaDiscovery(cidade: string, estado: string, cnae: string): Promise<CompanyData[]> {
+  const items: CompanyData[] = [];
+  let cursor: string | undefined;
+
+  for (let page = 0; page < MAX_FALLBACK_PAGES; page += 1) {
+    const payload = await fetchMinhaReceitaPage(cidade, estado, cnae, cursor);
+    if (!payload?.data || payload.data.length === 0) {
+      break;
+    }
+    items.push(...payload.data);
+    cursor = payload.cursor ?? undefined;
+    if (!cursor) break;
+  }
+
+  return items;
+}
+
+async function fetchCnpjWsDiscovery(cidade: string, estado: string, cnae: string): Promise<CompanyData[]> {
+  const token = process.env.CNPJ_WS_TOKEN ?? "";
+  const endpoint = process.env.CNPJWS_SEARCH_URL ?? "";
+  if (!token || !endpoint) return [];
+
+  const params = new URLSearchParams({
+    municipio: cidade,
+    uf: estado,
+    cnae,
+    limit: "100",
+  });
+
+  try {
+    const response = await fetch(`${endpoint}?${params.toString()}`, {
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!response.ok) return [];
+
+    const json = (await response.json()) as { data?: CompanyData[] } | CompanyData[];
+    if (Array.isArray(json)) return json;
+    if (Array.isArray(json.data)) return json.data;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+async function resolveCompanyData(
+  cnpj: string,
+  seed: CompanyData | null,
+  sourceDiscovery: CandidateLead["sourceDiscovery"],
+): Promise<{ data: CompanyData | null; sourceCompany: SchoolLead["source_company"] }> {
+  if (cnpj.length === 14) {
+    const brasil = await fetchBrasilApiCnpj(cnpj);
+    if (brasil) {
+      return { data: brasil, sourceCompany: "brasilapi" };
+    }
+    const openCnpj = await fetchOpenCnpj(cnpj);
+    if (openCnpj) {
+      return { data: openCnpj, sourceCompany: "opencnpj" };
+    }
+  }
+
+  if (seed) {
+    if (sourceDiscovery === "minha_receita") {
+      return { data: seed, sourceCompany: "minha_receita" };
+    }
+    if (sourceDiscovery === "cnpjws") {
+      return { data: seed, sourceCompany: "cnpjws" };
+    }
+  }
+
+  return { data: seed ?? null, sourceCompany: "none" };
+}
+
+async function createSourceSnapshot(
+  supabase: NonNullable<ReturnType<typeof getServerSupabaseClient>["supabase"]>,
+  sourceName: string,
+  cidade: string,
+  estado: string,
+  cnae: string,
+  entities: CompanyData[],
+) {
+  if (entities.length === 0) return;
+
+  try {
+    const watermark = `${normalizeText(cidade)}:${estado}:${cnae}:${Date.now()}`;
+    const startedAt = new Date().toISOString();
+    const { data: snapshotRows, error: snapshotError } = await supabase
+      .from("school_source_snapshots")
+      .insert([
+        {
+          source_name: sourceName,
+          source_version: "api_live",
+          snapshot_mode: "incremental",
+          watermark,
+          status: "running",
+          metadata: {
+            cidade,
+            estado,
+            cnae,
+            created_by: "dashboard_api_buscar",
+          },
+          started_at: startedAt,
+        },
+      ])
+      .select("id")
+      .limit(1);
+
+    if (snapshotError || !snapshotRows || snapshotRows.length === 0) {
+      return;
+    }
+
+    const snapshotId = snapshotRows[0].id as string;
+    const snapshotItems = entities
+      .map((entity) => {
+        const cnpj = normalizeDigits(entity.cnpj);
+        if (!cnpj) return null;
+        return {
+          snapshot_id: snapshotId,
+          entity_type: "company",
+          entity_id: cnpj,
+          entity_hash: `${cnpj}:${normalizeText(entity.razao_social)}:${normalizeText(entity.municipio)}`,
+          payload: entity,
+        };
+      })
+      .filter(Boolean);
+
+    if (snapshotItems.length > 0) {
+      await supabase.from("school_source_snapshot_items").upsert(snapshotItems, {
+        onConflict: "snapshot_id,entity_type,entity_id",
+      });
+    }
+
+    await supabase
+      .from("school_source_snapshots")
+      .update({
+        status: "completed",
+        records_read: entities.length,
+        records_changed: entities.length,
+        records_upserted: 0,
+        finished_at: new Date().toISOString(),
+      })
+      .eq("id", snapshotId);
+  } catch {
+    // Falhas de rastreabilidade nao podem quebrar o endpoint de busca.
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -291,7 +496,7 @@ export async function POST(request: NextRequest) {
   const cnae = normalizeDigits(body.cnae);
 
   if (!cidade || !estado || !cnae) {
-    return NextResponse.json({ error: "estado, cidade e cnae são obrigatórios" }, { status: 400 });
+    return NextResponse.json({ error: "estado, cidade e cnae sao obrigatorios" }, { status: 400 });
   }
 
   const { supabase, error: clientError } = getServerSupabaseClient();
@@ -299,55 +504,124 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: clientError }, { status: 500 });
   }
 
-  // Fonte primária: Censo INEP carregado em inep_schools.
   const { data, error } = await supabase
     .from("inep_schools")
     .select("*")
     .eq("sg_uf", estado)
     .ilike("no_municipio", `%${cidade}%`)
-    .limit(300);
+    .limit(500);
 
   if (error) {
     return NextResponse.json({ error: `Falha ao consultar INEP: ${error.message}` }, { status: 500 });
   }
 
   const inepRows = ((data ?? []) as IneqRow[]).filter((row) => matchesSegment(row, cnae));
-  if (inepRows.length === 0) {
+  const candidatesByKey = new Map<string, CandidateLead>();
+  const cnpjToInepRow = new Map<string, IneqRow>();
+
+  for (const row of inepRows) {
+    const cnpj = normalizeDigits(row.cnpj);
+    if (cnpj.length === 14) {
+      cnpjToInepRow.set(cnpj, row);
+    }
+    const key = cnpj.length === 14 ? `cnpj:${cnpj}` : `inep:${row.co_entidade}`;
+    if (!candidatesByKey.has(key)) {
+      candidatesByKey.set(key, {
+        inepRow: row,
+        seedCompany: null,
+        sourceDiscovery: "inep",
+      });
+    }
+  }
+
+  let fallbackCompanies: CompanyData[] = [];
+  let fallbackDiscovery: CandidateLead["sourceDiscovery"] = "minha_receita";
+
+  if (inepRows.length < MIN_INEP_RESULTS) {
+    if (DISCOVERY_PROVIDER === "inep_cnpjws") {
+      fallbackDiscovery = "cnpjws";
+      fallbackCompanies = await fetchCnpjWsDiscovery(cidade, estado, cnae);
+      if (fallbackCompanies.length === 0) {
+        fallbackDiscovery = "minha_receita";
+        fallbackCompanies = await fetchMinhaReceitaDiscovery(cidade, estado, cnae);
+      }
+    } else {
+      fallbackDiscovery = "minha_receita";
+      fallbackCompanies = await fetchMinhaReceitaDiscovery(cidade, estado, cnae);
+    }
+  }
+
+  if (fallbackCompanies.length > 0) {
+    await createSourceSnapshot(
+      supabase,
+      fallbackDiscovery === "cnpjws" ? "cnpj_ws_commercial" : "minha_receita_api",
+      cidade,
+      estado,
+      cnae,
+      fallbackCompanies,
+    );
+  }
+
+  for (const company of fallbackCompanies) {
+    const cnpj = normalizeDigits(company.cnpj);
+    if (cnpj.length !== 14) continue;
+
+    const key = `cnpj:${cnpj}`;
+    if (candidatesByKey.has(key)) continue;
+
+    const relatedInep = cnpjToInepRow.get(cnpj) ?? null;
+    candidatesByKey.set(key, {
+      inepRow: relatedInep,
+      seedCompany: company,
+      sourceDiscovery: fallbackDiscovery,
+    });
+  }
+
+  if (candidatesByKey.size === 0) {
     return NextResponse.json([]);
   }
 
   const now = new Date().toISOString();
+  const candidates = Array.from(candidatesByKey.values()).slice(0, MAX_SEARCH_RESULTS);
 
   const leads = await Promise.all(
-    inepRows.slice(0, 80).map(async (row, index) => {
-      await delay(index * 100);
-
-      const cnpj = normalizeDigits(row.cnpj);
-      const cnpjData = cnpj.length === 14 ? await fetchBrasilApiCnpj(cnpj) : null;
-      const cep = normalizeDigits(cnpjData?.cep);
+    candidates.map(async (candidate) => {
+      const cnpj = normalizeDigits(candidate.inepRow?.cnpj ?? candidate.seedCompany?.cnpj);
+      const { data: companyData, sourceCompany } = await resolveCompanyData(
+        cnpj,
+        candidate.seedCompany,
+        candidate.sourceDiscovery,
+      );
+      const cep = normalizeDigits(companyData?.cep);
       const cepData = await fetchCep(cep);
-      const score = scoreHeuristic(cnpjData, cnae);
+      const score = scoreHeuristic(companyData, cnae, candidate.inepRow?.qt_mat_bas ?? null);
 
-      const phoneDigits = extractPhoneDigits(cnpjData);
+      const phoneDigits = extractPhoneDigits(companyData);
       const phoneFormatted = phoneDigits ? `+55${phoneDigits}` : null;
-      const website = extractWebsite(cnpjData);
-      const abertura = extractDataAbertura(cnpjData);
+      const website = extractWebsite(companyData);
+      const abertura = extractDataAbertura(companyData);
 
       const lead: SchoolLead = {
-        id: String(row.co_entidade),
-        name: String(cnpjData?.nome_fantasia ?? cnpjData?.razao_social ?? row.no_entidade ?? "Escola"),
+        id: String(candidate.inepRow?.co_entidade ?? cnpj ?? crypto.randomUUID()),
+        name:
+          String(
+            companyData?.nome_fantasia ??
+              companyData?.razao_social ??
+              candidate.inepRow?.no_entidade ??
+              "Escola",
+          ) || "Escola",
         place_type: "school",
         school_segment: cnaeToSegment(cnae),
-        is_private: isPrivateFromTpRede(row.tp_rede),
+        is_private: isPrivateFromTpRede(candidate.inepRow?.tp_rede ?? null),
         phone_number: phoneDigits || null,
         phone_formatted: phoneFormatted,
         whatsapp_ready: phoneFormatted ? "Sim" : "Nao",
         website,
-        email: cnpjData?.email ?? null,
-        address: cnpjData?.logradouro ?? null,
-        bairro: cnpjData?.bairro ?? cepData?.neighborhood ?? null,
-        city: cnpjData?.municipio ?? row.no_municipio ?? cepData?.city ?? cidade,
-        state: cnpjData?.uf ?? row.sg_uf ?? cepData?.state ?? estado,
+        email: companyData?.email ?? null,
+        address: companyData?.logradouro ?? null,
+        bairro: companyData?.bairro ?? cepData?.neighborhood ?? null,
+        city: companyData?.municipio ?? candidate.inepRow?.no_municipio ?? cepData?.city ?? cidade,
+        state: companyData?.uf ?? candidate.inepRow?.sg_uf ?? cepData?.state ?? estado,
         cep: cep || null,
         latitude: cepData?.location?.coordinates?.latitude ? Number(cepData.location.coordinates.latitude) : null,
         longitude: cepData?.location?.coordinates?.longitude ? Number(cepData.location.coordinates.longitude) : null,
@@ -356,30 +630,32 @@ export async function POST(request: NextRequest) {
         reviews_count: null,
         reviews_average: null,
         opens_at: null,
-        place_id: cnpj || row.co_entidade,
+        place_id: cnpj || candidate.inepRow?.co_entidade || null,
         maps_url: null,
         cnpj: cnpj || null,
-        razao_social: cnpjData?.razao_social ?? row.no_entidade ?? null,
-        situacao_cadastral: cnpjData?.descricao_situacao_cadastral ?? "Ativa",
+        razao_social: companyData?.razao_social ?? candidate.inepRow?.no_entidade ?? null,
+        situacao_cadastral: companyData?.descricao_situacao_cadastral ?? companyData?.situacao_cadastral ?? "Ativa",
         data_abertura: abertura,
-        capital_social: extractCapitalSocial(cnpjData) || null,
-        porte: mapPorteToLead(extractPorte(cnpjData)),
-        cnae_descricao: cnpjData?.cnae_fiscal_descricao ?? null,
-        inep_code: row.co_entidade,
-        total_matriculas: row.qt_mat_bas,
-        ideb_af: row.nu_ideb_af,
+        capital_social: extractCapitalSocial(companyData) || null,
+        porte: mapPorteToLead(extractPorte(companyData)),
+        cnae_descricao: companyData?.cnae_fiscal_descricao ?? null,
+        inep_code: candidate.inepRow?.co_entidade ?? null,
+        total_matriculas: candidate.inepRow?.qt_mat_bas ?? null,
+        ideb_af: candidate.inepRow?.nu_ideb_af ?? null,
         ai_score: score.score,
         icp_match: score.icp,
         pain_points: null,
         abordagem_sugerida: suggestedApproach(score.score),
         prioridade: score.score >= 60 ? "imediata" : score.score >= 35 ? "normal" : "baixa",
-        justificativa_score: `Score heurístico com base no INEP + BrasilAPI (${score.score} pts).`,
+        justificativa_score: `Score heuristico multi-fonte (${score.score} pts).`,
         pipeline_stage: "Novo",
         owner: null,
         notes: null,
         next_action: null,
-        source: "inep_censo",
-        data_quality: 75,
+        source: `${candidate.sourceDiscovery}_${sourceCompany}`,
+        source_discovery: candidate.sourceDiscovery,
+        source_company: sourceCompany,
+        data_quality: 78,
         scraped_at: now,
         created_at: now,
         updated_at: now,
@@ -389,6 +665,15 @@ export async function POST(request: NextRequest) {
     }),
   );
 
-  leads.sort((a, b) => (b.ai_score ?? 0) - (a.ai_score ?? 0));
-  return NextResponse.json(leads);
+  const deduped = new Map<string, SchoolLead>();
+  for (const lead of leads) {
+    const cnpj = normalizeDigits(lead.cnpj);
+    const key = cnpj.length === 14 ? `cnpj:${cnpj}` : `inep:${normalizeDigits(lead.inep_code) || lead.id}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, lead);
+    }
+  }
+
+  const sorted = Array.from(deduped.values()).sort((a, b) => (b.ai_score ?? 0) - (a.ai_score ?? 0));
+  return NextResponse.json(sorted);
 }

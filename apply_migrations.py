@@ -36,6 +36,7 @@ MIGRATIONS = [
     os.path.join(BASE_DIR, "supabase", "migrations", "001_school_leads.sql"),
     os.path.join(BASE_DIR, "supabase", "migrations", "002_inep_schools.sql"),
     os.path.join(BASE_DIR, "supabase", "migrations", "003_pipeline_history.sql"),
+    os.path.join(BASE_DIR, "supabase", "migrations", "004_phase1_production.sql"),
 ]
 
 
@@ -121,7 +122,14 @@ def verify_tables() -> dict:
         "apikey": SERVICE_KEY,
         "Authorization": f"Bearer {SERVICE_KEY}",
     }
-    tables = ["school_leads", "inep_schools", "pipeline_history"]
+    tables = [
+        "school_leads",
+        "inep_schools",
+        "pipeline_history",
+        "school_source_snapshots",
+        "school_source_snapshot_items",
+        "school_lead_quality_audits",
+    ]
     results = {}
     for t in tables:
         r = requests.get(f"{url_base}/{t}?select=*&limit=0", headers=headers, timeout=10)

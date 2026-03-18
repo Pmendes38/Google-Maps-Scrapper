@@ -19,6 +19,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 
 ALLOWED_COLUMNS = {
     "name",
@@ -324,6 +326,11 @@ def main() -> int:
     if args.dry_run:
         print("Dry run enabled. No data sent to Supabase.")
         return 0
+
+    repo_root = Path(__file__).resolve().parents[1]
+    load_dotenv(repo_root / "scraper" / ".env")
+    load_dotenv(repo_root / "dashboard" / ".env.local")
+    load_dotenv(repo_root / ".env")
 
     supabase_url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
     service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
