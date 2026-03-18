@@ -132,17 +132,27 @@ function toRecord(value: unknown): AnyObject {
 
 function toNullableNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+
   let text = String(value).trim();
   if (!text) return null;
+
+  // Preserve decimal precision for coordinates and indicators.
+  if (/^-?\d+(\.\d+)?$/.test(text)) {
+    const parsed = Number(text);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (/^-?\d+(,\d+)?$/.test(text)) {
+    const parsed = Number(text.replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
 
   const hasDot = text.includes(".");
   const hasComma = text.includes(",");
   if (hasDot && hasComma) {
     text = text.replace(/\./g, "").replace(",", ".");
   } else if (hasComma) {
-    text = /,\d{1,2}$/.test(text) ? text.replace(",", ".") : text.replace(/,/g, "");
-  } else if (hasDot && !/\.\d{1,2}$/.test(text)) {
-    text = text.replace(/\./g, "");
+    text = text.replace(",", ".");
   }
 
   const parsed = Number(text);
