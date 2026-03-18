@@ -74,6 +74,11 @@ type CandidateLead = {
   sourceDiscovery: "inep" | "minha_receita" | "cnpjws";
 };
 
+type QEduProfileRow = {
+  inep_code: string | null;
+  qtd_matriculas: number | null;
+};
+
 type AdministrativeFilter = "todas" | "privada" | "publica" | "federal" | "estadual" | "municipal";
 
 const DISCOVERY_PROVIDER = (process.env.DISCOVERY_PROVIDER ?? "inep_minha_receita").toLowerCase();
@@ -315,6 +320,41 @@ function mapPorteToLead(porte: string): "ME" | "EPP" | "Demais" | null {
   if (porte === "EPP" || porte.includes("EMPRESA DE PEQUENO PORTE")) return "EPP";
   if (porte === "DEMAIS") return "Demais";
   return null;
+}
+
+function normalizeInepMatriculas(total: number | null, inf: number | null, fund: number | null, med: number | null): number | null {
+  const totalNum = Number(total ?? 0);
+  const signals = [Number(inf ?? 0), Number(fund ?? 0), Number(med ?? 0)].filter((value) => value > 0);
+  const isLikelyFlag = totalNum <= 1 && signals.length > 0 && signals.every((value) => value <= 1);
+  if (isLikelyFlag) return null;
+  if (!Number.isFinite(totalNum) || totalNum <= 0) return null;
+  return totalNum;
+}
+
+function estimateMonthlyRevenue(
+  totalMatriculas: number | null,
+  porte: "ME" | "EPP" | "Demais" | null,
+  capitalSocial: number | null,
+  segment: SchoolSegment,
+): number | null {
+  if (totalMatriculas !== null && totalMatriculas > 0) {
+    return totalMatriculas * 700;
+  }
+
+  if (porte === "Demais") return 280_000;
+  if (porte === "EPP") return 140_000;
+  if (porte === "ME") return 65_000;
+
+  if (capitalSocial !== null && capitalSocial >= 1_000_000) return 260_000;
+  if (capitalSocial !== null && capitalSocial >= 300_000) return 130_000;
+  if (capitalSocial !== null && capitalSocial >= 100_000) return 80_000;
+  if (capitalSocial !== null && capitalSocial >= 30_000) return 45_000;
+
+  if (segment === "ensino medio") return 90_000;
+  if (segment === "ensino fundamental") return 80_000;
+  if (segment === "educacao infantil" || segment === "creche/bercario") return 55_000;
+  if (segment === "idiomas/bilingue") return 75_000;
+  return 50_000;
 }
 
 async function fetchMinhaReceitaPage(
@@ -601,6 +641,31 @@ export async function POST(request: NextRequest) {
 
   const now = new Date().toISOString();
   const candidates = Array.from(candidatesByKey.values()).slice(0, MAX_SEARCH_RESULTS);
+  const inepCodes = Array.from(
+    new Set(
+      candidates
+        .map((candidate) => normalizeDigits(candidate.inepRow?.co_entidade))
+        .filter((code) => code.length > 0),
+    ),
+  );
+  const qeduMatriculasByInep = new Map<string, number>();
+
+  if (inepCodes.length > 0) {
+    const { data: qeduRows, error: qeduError } = await supabase
+      .from("school_qedu_profiles")
+      .select("inep_code,qtd_matriculas")
+      .in("inep_code", inepCodes);
+
+    if (!qeduError && Array.isArray(qeduRows)) {
+      for (const row of qeduRows as QEduProfileRow[]) {
+        const code = normalizeDigits(row.inep_code);
+        const qty = Number(row.qtd_matriculas ?? 0);
+        if (code && Number.isFinite(qty) && qty > 0) {
+          qeduMatriculasByInep.set(code, qty);
+        }
+      }
+    }
+  }
 
   const leads = await Promise.all(
     candidates.map(async (candidate) => {
@@ -616,16 +681,29 @@ export async function POST(request: NextRequest) {
       const phoneFormatted = phoneDigits ? `+55${phoneDigits}` : null;
       const website = extractWebsite(companyData);
       const abertura = extractDataAbertura(companyData);
+      const segment = cnaeToSegment(cnae);
+      const leadPorte = mapPorteToLead(extractPorte(companyData));
+      const capitalSocial = extractCapitalSocial(companyData) || null;
+      const inepCode = normalizeDigits(candidate.inepRow?.co_entidade);
+      const qeduMatriculas = inepCode ? (qeduMatriculasByInep.get(inepCode) ?? null) : null;
+      const normalizedInepMatriculas = normalizeInepMatriculas(
+        candidate.inepRow?.qt_mat_bas ?? null,
+        candidate.inepRow?.qt_mat_inf ?? null,
+        candidate.inepRow?.qt_mat_fund ?? null,
+        candidate.inepRow?.qt_mat_med ?? null,
+      );
+      const effectiveMatriculas = qeduMatriculas ?? normalizedInepMatriculas;
+      const estimatedRevenue = estimateMonthlyRevenue(effectiveMatriculas, leadPorte, capitalSocial, segment);
       const score = computeIcpFitScore({
-        schoolSegment: cnaeToSegment(cnae),
+        schoolSegment: segment,
         isPrivate: isPrivateFromTpRede(candidate.inepRow?.tp_rede ?? null) === "Sim",
-        totalMatriculas: candidate.inepRow?.qt_mat_bas ?? null,
+        totalMatriculas: effectiveMatriculas,
         matriculasInfantil: candidate.inepRow?.qt_mat_inf ?? null,
         matriculasFundamental: candidate.inepRow?.qt_mat_fund ?? null,
         matriculasMedio: candidate.inepRow?.qt_mat_med ?? null,
         hasPhone: Boolean(phoneDigits),
         hasAddressOrWebsite: Boolean(companyData?.logradouro || website),
-        estimatedRevenue: (candidate.inepRow?.qt_mat_bas ?? 0) * 700,
+        estimatedRevenue,
       });
 
       const lead: SchoolLead = {
@@ -638,7 +716,7 @@ export async function POST(request: NextRequest) {
               "Escola",
           ) || "Escola",
         place_type: "school",
-        school_segment: cnaeToSegment(cnae),
+        school_segment: segment,
         is_private: isPrivateFromTpRede(candidate.inepRow?.tp_rede ?? null),
         phone_number: phoneDigits || null,
         phone_formatted: phoneFormatted,
@@ -663,11 +741,11 @@ export async function POST(request: NextRequest) {
         razao_social: companyData?.razao_social ?? candidate.inepRow?.no_entidade ?? null,
         situacao_cadastral: companyData?.descricao_situacao_cadastral ?? companyData?.situacao_cadastral ?? "Ativa",
         data_abertura: abertura,
-        capital_social: extractCapitalSocial(companyData) || null,
-        porte: mapPorteToLead(extractPorte(companyData)),
+        capital_social: capitalSocial,
+        porte: leadPorte,
         cnae_descricao: companyData?.cnae_fiscal_descricao ?? null,
         inep_code: candidate.inepRow?.co_entidade ?? null,
-        total_matriculas: candidate.inepRow?.qt_mat_bas ?? null,
+        total_matriculas: effectiveMatriculas,
         ideb_af: candidate.inepRow?.nu_ideb_af ?? null,
         ai_score: score.score,
         icp_match: score.icpMatch,

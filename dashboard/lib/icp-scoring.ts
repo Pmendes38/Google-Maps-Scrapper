@@ -43,9 +43,20 @@ function toNumber(value: unknown): number {
   return Number.isFinite(num) ? num : 0;
 }
 
+function isLikelyInepFlagInput(input: IcpFitInput): boolean {
+  const total = toNumber(input.totalMatriculas);
+  const inf = toNumber(input.matriculasInfantil);
+  const fund = toNumber(input.matriculasFundamental);
+  const med = toNumber(input.matriculasMedio);
+  const nonZero = [total, inf, fund, med].filter((value) => value > 0);
+  if (nonZero.length === 0) return false;
+  return total <= 1 && nonZero.every((value) => value <= 1);
+}
+
 function getEstimatedRevenue(input: IcpFitInput): number {
   const explicitRevenue = toNumber(input.estimatedRevenue);
   if (explicitRevenue > 0) return explicitRevenue;
+  if (isLikelyInepFlagInput(input)) return 0;
   const students = toNumber(input.totalMatriculas);
   return students > 0 ? students * TICKET_REGIONAL : 0;
 }
@@ -56,8 +67,16 @@ function getSegmentScore(input: IcpFitInput): number {
   const fund = toNumber(input.matriculasFundamental);
   const med = toNumber(input.matriculasMedio);
   const segment = normalizeSegment(input.schoolSegment);
+  const likelyInepFlag = isLikelyInepFlagInput(input);
 
   if (!input.isPrivate) return 0;
+
+  if (likelyInepFlag) {
+    if (fund > 0 && med > 0) return 20;
+    if (med > 0) return 12;
+    if (fund > 0) return 10;
+    if (inf > 0) return 8;
+  }
 
   if (fund > 0 && med > 0 && total >= 201 && total <= 500) return 25;
   if (segment.includes("idioma") || segment.includes("bilingue")) return 23;
