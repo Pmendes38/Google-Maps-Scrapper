@@ -18,66 +18,63 @@ export function FilterBar() {
 
   function update(key: string, value: string) {
     const next = new URLSearchParams(params.toString());
-    if (value) {
-      next.set(key, value);
-    } else {
-      next.delete(key);
-    }
+    if (value) next.set(key, value);
+    else next.delete(key);
     router.push(`/?${next.toString()}`);
   }
 
   return (
-    <div className="flex flex-wrap gap-3">
+    <div className="flex flex-wrap items-center gap-3">
       <select
-        className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm"
-        value={params.get("state") ?? ""}
+        className="wayzen-input px-3 py-2 text-sm"
         onChange={(event) => update("state", event.target.value)}
+        value={params.get("state") ?? ""}
       >
         <option value="">Todos os estados</option>
         {UF_LIST.map((uf) => (
-          <option key={uf} value={uf}>
+          <option className="bg-[#14071f]" key={uf} value={uf}>
             {uf}
           </option>
         ))}
       </select>
 
       <select
-        className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm"
-        value={params.get("segment") ?? ""}
+        className="wayzen-input px-3 py-2 text-sm"
         onChange={(event) => update("segment", event.target.value)}
+        value={params.get("segment") ?? ""}
       >
         <option value="">Todos os segmentos</option>
         {SEGMENTS.map((segment) => (
-          <option key={segment} value={segment}>
+          <option className="bg-[#14071f]" key={segment} value={segment}>
             {segment}
           </option>
         ))}
       </select>
 
       <select
-        className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm"
-        value={params.get("icp") ?? ""}
+        className="wayzen-input px-3 py-2 text-sm"
         onChange={(event) => update("icp", event.target.value)}
+        value={params.get("icp") ?? ""}
       >
         <option value="">ICP (todos)</option>
         {(["alto", "medio", "baixo"] as const).map((icp) => (
-          <option key={icp} value={icp}>
+          <option className="bg-[#14071f]" key={icp} value={icp}>
             ICP {icp}
           </option>
         ))}
       </select>
 
-      <label className="flex items-center gap-2 text-sm text-gray-600">
+      <label className="flex items-center gap-2 rounded-lg border border-[var(--wayzen-border)] bg-[rgba(39,39,87,0.25)] px-3 py-2 text-sm text-white/80">
         <input
-          className="w-24"
+          className="accent-[#BF00FF]"
           defaultValue={params.get("min_score") ?? "0"}
           max="100"
           min="0"
+          onChange={(event) => update("min_score", event.target.value !== "0" ? event.target.value : "")}
           step="10"
           type="range"
-          onChange={(event) => update("min_score", event.target.value !== "0" ? event.target.value : "")}
         />
-        Score &gt;= {params.get("min_score") ?? 0}
+        Score {"\u003e="} {params.get("min_score") ?? 0}
       </label>
     </div>
   );

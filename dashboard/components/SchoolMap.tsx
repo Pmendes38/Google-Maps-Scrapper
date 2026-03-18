@@ -5,9 +5,9 @@ import { useEffect, useRef } from "react";
 import type { SchoolLead } from "@/lib/types";
 
 const COLORS: Record<string, string> = {
-  alto: "#16a34a",
-  medio: "#ca8a04",
-  baixo: "#dc2626",
+  alto: "#BF00FF",
+  medio: "#FF8C00",
+  baixo: "#FF0080",
 };
 
 type SingleMarker = {
@@ -59,16 +59,17 @@ export function SchoolMap({
         center: [centerLat, centerLng],
         zoom: initialZoom,
       });
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap",
+
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+        attribution: '&copy; <a href="https://carto.com">CARTO</a>',
       }).addTo(map);
 
       if (marker) {
-        const color = COLORS[marker.icp ?? ""] ?? "#7c3aed";
+        const color = COLORS[marker.icp ?? ""] ?? "#BF00FF";
         L.circleMarker([marker.lat, marker.lng], {
           radius: 10,
           fillColor: color,
-          color: "#fff",
+          color: "#ffffff",
           weight: 1.5,
           fillOpacity: 0.9,
         })
@@ -82,15 +83,15 @@ export function SchoolMap({
           const lng = lead.cep_lng ?? lead.longitude;
           if (!lat || !lng) return;
 
-          const color = COLORS[lead.icp_match ?? ""] ?? "#6b7280";
+          const color = COLORS[lead.icp_match ?? ""] ?? "#7B5BA5";
           const radius = lead.ai_score ? Math.max(6, lead.ai_score / 12) : 6;
 
           L.circleMarker([lat, lng], {
             radius,
             fillColor: color,
-            color: "#fff",
+            color: "#ffffff",
             weight: 1.5,
-            fillOpacity: 0.8,
+            fillOpacity: 0.82,
           })
             .bindPopup(
               `<strong>${lead.name}</strong><br/>${lead.city ?? ""} · ${lead.state ?? ""}<br/>Score: <strong>${lead.ai_score ?? "-"}</strong> · ICP: ${lead.icp_match ?? "-"}`,
@@ -112,3 +113,4 @@ export function SchoolMap({
 
   return <div ref={mapNodeRef} style={{ height, width: "100%", borderRadius: 12 }} />;
 }
+

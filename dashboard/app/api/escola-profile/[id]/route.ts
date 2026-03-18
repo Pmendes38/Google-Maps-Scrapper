@@ -15,6 +15,7 @@ type BrasilApiCnpj = {
   capital_social?: string | number;
   data_inicio_atividade?: string;
   situacao_cadastral?: string;
+  descricao_situacao_cadastral?: string;
   logradouro?: string;
   bairro?: string;
   municipio?: string;
@@ -65,7 +66,19 @@ function toRecord(value: unknown): AnyObject {
 
 function toNullableNumber(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
-  const text = String(value).replace(/\./g, "").replace(",", ".");
+  let text = String(value).trim();
+  if (!text) return null;
+
+  const hasDot = text.includes(".");
+  const hasComma = text.includes(",");
+  if (hasDot && hasComma) {
+    text = text.replace(/\./g, "").replace(",", ".");
+  } else if (hasComma) {
+    text = /,\d{1,2}$/.test(text) ? text.replace(",", ".") : text.replace(/,/g, "");
+  } else if (hasDot && !/\.\d{1,2}$/.test(text)) {
+    text = text.replace(/\./g, "");
+  }
+
   const parsed = Number(text);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -440,7 +453,12 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     anos_operacao: yearsSince(dataAbertura),
     socios: normalizeSocios(cnpjData),
     situacao_cadastral:
-      String(cnpjData?.situacao_cadastral ?? lead?.situacao_cadastral ?? "").trim() || null,
+      String(
+        cnpjData?.descricao_situacao_cadastral ??
+          cnpjData?.situacao_cadastral ??
+          lead?.situacao_cadastral ??
+          "",
+      ).trim() || null,
   };
 
   return NextResponse.json(profile);

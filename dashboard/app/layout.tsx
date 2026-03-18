@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
-import { Space_Grotesk } from "next/font/google";
+import { Manrope, Outfit } from "next/font/google";
 import Link from "next/link";
 
 import "./globals.css";
 
-const font = Space_Grotesk({ subsets: ["latin"], variable: "--font-wayzen" });
+const outfit = Outfit({ subsets: ["latin"], variable: "--font-outfit" });
+const manrope = Manrope({ subsets: ["latin"], variable: "--font-manrope" });
 
 export const metadata: Metadata = {
   title: "Wayzen School Intelligence",
@@ -14,20 +15,40 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-BR">
-      <body className={`${font.variable} bg-[#f2f2ec] font-sans text-gray-900`}>
-        <header className="border-b border-gray-200 bg-white/85 backdrop-blur">
-          <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-            <Link className="text-lg font-semibold tracking-tight" href="/">
-              Wayzen School Intelligence
+      <body className={`${outfit.variable} ${manrope.variable} text-white antialiased`}>
+        <header className="sticky top-0 z-40 border-b border-[var(--wayzen-border)] bg-[rgba(20,20,20,0.92)] backdrop-blur-md">
+          <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 md:px-6">
+            <Link className="flex items-center gap-3" href="/">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--wayzen-purple)] to-[var(--wayzen-magenta)] font-[var(--font-outfit)] text-lg font-bold text-white">
+                W
+              </span>
+              <span className="font-[var(--font-outfit)] text-base font-semibold tracking-wide text-white md:text-lg">
+                Wayzen School Intelligence
+              </span>
             </Link>
-            <nav className="flex gap-2 text-sm">
-              <Link className="rounded-full border border-gray-300 bg-white px-4 py-2 hover:border-gray-400" href="/pipeline">
-                Pipeline
+            <nav className="flex flex-wrap items-center gap-2 text-sm">
+              <Link
+                className="rounded-full border border-[var(--wayzen-border)] bg-[rgba(39,39,87,0.35)] px-4 py-2 text-white/90 transition hover:border-[var(--wayzen-purple)] hover:text-white"
+                href="/"
+              >
+                Dashboard
               </Link>
-              <Link className="rounded-full border border-gray-300 bg-white px-4 py-2 hover:border-gray-400" href="/buscar">
+              <Link
+                className="rounded-full border border-[var(--wayzen-border)] bg-[rgba(39,39,87,0.35)] px-4 py-2 text-white/90 transition hover:border-[var(--wayzen-purple)] hover:text-white"
+                href="/buscar"
+              >
                 Buscar
               </Link>
-              <Link className="rounded-full border border-gray-300 bg-white px-4 py-2 hover:border-gray-400" href="/map">
+              <Link
+                className="rounded-full border border-[var(--wayzen-border)] bg-[rgba(39,39,87,0.35)] px-4 py-2 text-white/90 transition hover:border-[var(--wayzen-purple)] hover:text-white"
+                href="/pipeline"
+              >
+                Pipeline
+              </Link>
+              <Link
+                className="rounded-full border border-[var(--wayzen-border)] bg-[rgba(39,39,87,0.35)] px-4 py-2 text-white/90 transition hover:border-[var(--wayzen-purple)] hover:text-white"
+                href="/map"
+              >
                 Mapa
               </Link>
             </nav>

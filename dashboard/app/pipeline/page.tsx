@@ -8,12 +8,15 @@ export default async function PipelinePage() {
   const { supabase, error: clientError } = getServerSupabaseClient();
   if (!supabase) {
     return (
-      <main className="mx-auto max-w-7xl px-6 py-10">
-        <h1 className="text-2xl font-semibold">Pipeline</h1>
-        <p className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">Erro de configuracao do Supabase: {clientError}</p>
+      <main className="wayzen-page px-6 py-10">
+        <h1 className="font-[var(--font-outfit)] text-2xl font-semibold">Pipeline</h1>
+        <p className="mt-4 rounded-xl border border-rose-300/40 bg-rose-500/15 p-4 text-rose-100">
+          Erro de configuracao do Supabase: {clientError}
+        </p>
       </main>
     );
   }
+
   const { data, error } = await supabase
     .from("school_leads")
     .select("*")
@@ -23,22 +26,33 @@ export default async function PipelinePage() {
 
   if (error) {
     return (
-      <main className="mx-auto max-w-7xl px-6 py-10">
-        <h1 className="text-2xl font-semibold">Pipeline</h1>
-        <p className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">Erro ao carregar pipeline: {error.message}</p>
+      <main className="wayzen-page px-6 py-10">
+        <h1 className="font-[var(--font-outfit)] text-2xl font-semibold">Pipeline</h1>
+        <p className="mt-4 rounded-xl border border-rose-300/40 bg-rose-500/15 p-4 text-rose-100">
+          Erro ao carregar pipeline: {error.message}
+        </p>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto max-w-7xl px-6 py-10">
-      <header className="mb-6 flex items-center justify-between gap-4">
-        <h1 className="text-3xl font-semibold tracking-tight">Pipeline Comercial</h1>
-        <Link className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm hover:border-gray-400" href="/">
-          Voltar
-        </Link>
-      </header>
-      <KanbanBoard initialLeads={(data ?? []) as SchoolLead[]} />
+    <main className="wayzen-page px-4 py-8 md:px-6">
+      <section className="mx-auto max-w-7xl">
+        <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="font-[var(--font-outfit)] text-3xl font-bold tracking-tight">Pipeline Comercial</h1>
+            <p className="mt-1 text-sm text-white/70">Arraste os cards para atualizar o estagio comercial.</p>
+          </div>
+          <Link
+            className="rounded-full border border-[var(--wayzen-border)] bg-[rgba(39,39,87,0.4)] px-4 py-2 text-sm text-white/90 transition hover:border-[var(--wayzen-purple)]"
+            href="/"
+          >
+            Voltar
+          </Link>
+        </header>
+        <KanbanBoard initialLeads={(data ?? []) as SchoolLead[]} />
+      </section>
     </main>
   );
 }
+

@@ -19,9 +19,11 @@ export function StatsPanel({
   return (
     <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
       {items.map((item) => (
-        <div key={item.label} className="rounded-xl border border-gray-200 bg-white p-4">
-          <p className="text-sm text-gray-500">{item.label}</p>
-          <p className="mt-1 text-2xl font-semibold">{item.value.toLocaleString("pt-BR")}</p>
+        <div key={item.label} className="rounded-xl border border-[var(--wayzen-border)] bg-[rgba(39,39,87,0.42)] p-4">
+          <p className="text-sm text-white/60">{item.label}</p>
+          <p className="mt-1 font-[var(--font-outfit)] text-2xl font-semibold text-white">
+            {item.value.toLocaleString("pt-BR")}
+          </p>
         </div>
       ))}
     </div>

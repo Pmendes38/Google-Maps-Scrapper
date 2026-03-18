@@ -47,7 +47,7 @@ export function ImportCsvButton() {
   return (
     <div className="relative">
       <button
-        className="rounded-full border border-gray-300 bg-white px-4 py-2 text-sm hover:border-gray-400 disabled:opacity-60"
+        className="rounded-full border border-[var(--wayzen-border)] bg-[rgba(39,39,87,0.35)] px-4 py-2 text-sm text-white hover:border-[var(--wayzen-purple)] disabled:opacity-60"
         disabled={isLoading}
         onClick={() => inputRef.current?.click()}
         type="button"
@@ -64,7 +64,7 @@ export function ImportCsvButton() {
       />
 
       {toast && (
-        <div className="absolute right-0 top-12 z-20 w-80 rounded-lg border border-gray-200 bg-white p-3 text-xs text-gray-700 shadow-md">
+        <div className="absolute right-0 top-12 z-20 w-80 rounded-lg border border-[var(--wayzen-border)] bg-[rgba(39,39,87,0.92)] p-3 text-xs text-white/90 shadow-md">
           {toast}
         </div>
       )}

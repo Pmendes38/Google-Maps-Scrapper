@@ -6,21 +6,23 @@ interface ScoreBadgeProps {
 
 export function ScoreBadge({ score, icp, size = "md" }: ScoreBadgeProps) {
   if (score === null || score === undefined) {
-    return <span className="text-xs text-gray-400">sem score</span>;
+    return <span className="text-xs text-white/55">sem score</span>;
   }
 
-  const color =
+  const tone =
     score >= 70
-      ? "bg-green-100 text-green-800 border-green-200"
+      ? "border-[#BF00FF] bg-[rgba(191,0,255,0.2)] text-[#BF00FF]"
       : score >= 40
-        ? "bg-yellow-100 text-yellow-800 border-yellow-200"
-        : "bg-red-100 text-red-800 border-red-200";
+        ? "border-[#FF8C00] bg-[rgba(255,140,0,0.15)] text-[#FFA500]"
+        : "border-[#FF0080] bg-[rgba(255,0,128,0.15)] text-[#FF0080]";
+
   const dims = size === "sm" ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm";
 
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full border font-medium ${color} ${dims}`}>
+    <span className={`inline-flex items-center gap-1 rounded-full border font-medium ${tone} ${dims}`}>
       {score}
-      {icp && <span className="text-xs opacity-60">· {icp}</span>}
+      {icp && <span className="text-xs opacity-70">· {icp}</span>}
     </span>
   );
 }
+

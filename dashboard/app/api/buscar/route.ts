@@ -18,14 +18,16 @@ type IneqRow = {
   sg_uf: string | null;
 };
 
-type BrasilApiCnpj = {
+type CompanyData = {
   cnpj?: string;
   razao_social?: string;
   nome_fantasia?: string;
   cep?: string;
+  numero?: string;
   ddd_telefone_1?: string;
   telefone_1?: string;
   descricao_porte?: string;
+  descricao_situacao_cadastral?: string;
   website?: string;
   site?: string;
   url?: string;
@@ -70,7 +72,26 @@ function normalizeText(value: unknown): string {
 }
 
 function parseNumber(value: unknown): number {
-  const text = String(value ?? "").replace(/\./g, "").replace(",", ".");
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  const raw = String(value ?? "").trim();
+  if (!raw) return 0;
+
+  let text = raw;
+  const hasDot = text.includes(".");
+  const hasComma = text.includes(",");
+
+  if (hasDot && hasComma) {
+    // pt-BR style: 50.000,00 -> 50000.00
+    text = text.replace(/\./g, "").replace(",", ".");
+  } else if (hasComma) {
+    text = /,\d{1,2}$/.test(text) ? text.replace(",", ".") : text.replace(/,/g, "");
+  } else if (hasDot && !/\.\d{1,2}$/.test(text)) {
+    text = text.replace(/\./g, "");
+  }
+
   const n = Number(text);
   return Number.isFinite(n) ? n : 0;
 }
@@ -119,11 +140,11 @@ function matchesSegment(row: IneqRow, cnae: string): boolean {
   }
 }
 
-async function fetchBrasilApiCnpj(cnpj: string): Promise<BrasilApiCnpj | null> {
+async function fetchBrasilApiCnpj(cnpj: string): Promise<CompanyData | null> {
   try {
     const resp = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { cache: "no-store" });
     if (!resp.ok) return null;
-    return (await resp.json()) as BrasilApiCnpj;
+    return (await resp.json()) as CompanyData;
   } catch {
     return null;
   }
@@ -141,25 +162,25 @@ async function fetchCep(cep: string): Promise<CepResponse | null> {
   }
 }
 
-function extractCapitalSocial(data: BrasilApiCnpj | null): number {
+function extractCapitalSocial(data: CompanyData | null): number {
   return parseNumber(data?.capital_social);
 }
 
-function extractPorte(data: BrasilApiCnpj | null): string {
+function extractPorte(data: CompanyData | null): string {
   const porteRaw = data?.porte ?? data?.descricao_porte ?? "NAO INFORMADO";
   return normalizeText(porteRaw);
 }
 
-function extractDataAbertura(data: BrasilApiCnpj | null): string | null {
+function extractDataAbertura(data: CompanyData | null): string | null {
   const value = String(data?.data_inicio_atividade ?? "").trim();
   return value || null;
 }
 
-function extractCnaeFiscal(data: BrasilApiCnpj | null): string {
+function extractCnaeFiscal(data: CompanyData | null): string {
   return normalizeDigits(data?.cnae_fiscal);
 }
 
-function extractPhoneDigits(data: BrasilApiCnpj | null): string {
+function extractPhoneDigits(data: CompanyData | null): string {
   const dddPhone = normalizeDigits(data?.ddd_telefone_1);
   if (dddPhone.length >= 8) {
     return dddPhone;
@@ -169,13 +190,12 @@ function extractPhoneDigits(data: BrasilApiCnpj | null): string {
   return digits;
 }
 
-function extractWebsite(data: BrasilApiCnpj | null): string | null {
+function extractWebsite(data: CompanyData | null): string | null {
   const candidates = [
     data?.website,
     data?.site,
     data?.url,
     data?.dominio,
-    data?.descricao_tipo_logradouro,
   ]
     .map((v) => String(v ?? "").trim())
     .filter(Boolean);
@@ -184,34 +204,51 @@ function extractWebsite(data: BrasilApiCnpj | null): string | null {
   return found || null;
 }
 
-function scoreHeuristic(data: BrasilApiCnpj | null, requestedCnae: string): { score: number; icp: ICPMatch } {
+function getPorteScore(porte: string): number {
+  if (porte === "ME" || porte.includes("MICRO EMPRESA")) return 10;
+  if (porte === "EPP" || porte.includes("EMPRESA DE PEQUENO PORTE")) return 15;
+  if (porte === "DEMAIS") return 20;
+  if (porte.includes("NAO INFORMADO")) return 2;
+  return 2;
+}
+
+function getCapitalSocialScore(capital: number): number {
+  if (capital >= 500000) return 25;
+  if (capital >= 200000) return 18;
+  if (capital >= 50000) return 12;
+  if (capital >= 1) return 5;
+  return 2;
+}
+
+function getYearsScore(years: number): number {
+  if (years < 0) return 2;
+  if (years < 2) return 3;
+  if (years < 5) return 8;
+  if (years <= 15) return 15;
+  return 10;
+}
+
+function getCnaeScore(companyCnae: string, requestedCnae: string): number {
+  if (companyCnae && companyCnae === requestedCnae) return 25;
+  if (companyCnae.startsWith("85")) return 12;
+  return 0;
+}
+
+function scoreHeuristic(data: CompanyData | null, requestedCnae: string): { score: number; icp: ICPMatch } {
   let score = 0;
 
   const capital = extractCapitalSocial(data);
-  if (capital >= 500000) score += 25;
-  else if (capital >= 200000) score += 18;
-  else if (capital >= 50000) score += 12;
-  else if (capital >= 1) score += 5;
-  else score += 2;
+  score += getCapitalSocialScore(capital);
 
   const porte = extractPorte(data);
-  if (porte.includes("DEMAIS")) score += 20;
-  else if (porte.includes("EPP")) score += 15;
-  else if (porte === "ME" || porte.includes("MICRO")) score += 10;
-  else if (porte.includes("NAO INFORMADO")) score += 2;
-  else score += 5;
+  score += getPorteScore(porte);
 
   const cnae = extractCnaeFiscal(data);
-  if (cnae && cnae === requestedCnae) score += 25;
-  else if (cnae.startsWith("85")) score += 12;
+  score += getCnaeScore(cnae, requestedCnae);
 
   const abertura = extractDataAbertura(data);
   const years = abertura ? yearsSince(abertura) : -1;
-  if (years < 0) score += 2;
-  else if (years > 15) score += 10;
-  else if (years >= 5) score += 15;
-  else if (years >= 2) score += 8;
-  else score += 3;
+  score += getYearsScore(years);
 
   const phone = extractPhoneDigits(data);
   if (phone) score += 15;
@@ -234,6 +271,17 @@ function isPrivateFromTpRede(tpRede: number | null): "Sim" | "Nao" | "Indefinido
   if (tpRede === 4) return "Sim";
   if (tpRede === 1 || tpRede === 2 || tpRede === 3) return "Nao";
   return "Indefinido";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mapPorteToLead(porte: string): "ME" | "EPP" | "Demais" | null {
+  if (porte === "ME" || porte.includes("MICRO EMPRESA")) return "ME";
+  if (porte === "EPP" || porte.includes("EMPRESA DE PEQUENO PORTE")) return "EPP";
+  if (porte === "DEMAIS") return "Demais";
+  return null;
 }
 
 export async function POST(request: NextRequest) {
@@ -272,6 +320,8 @@ export async function POST(request: NextRequest) {
 
   const leads = await Promise.all(
     inepRows.slice(0, 80).map(async (row, index) => {
+      await delay(index * 100);
+
       const cnpj = normalizeDigits(row.cnpj);
       const cnpjData = cnpj.length === 14 ? await fetchBrasilApiCnpj(cnpj) : null;
       const cep = normalizeDigits(cnpjData?.cep);
@@ -310,14 +360,10 @@ export async function POST(request: NextRequest) {
         maps_url: null,
         cnpj: cnpj || null,
         razao_social: cnpjData?.razao_social ?? row.no_entidade ?? null,
-        situacao_cadastral: "Ativa",
+        situacao_cadastral: cnpjData?.descricao_situacao_cadastral ?? "Ativa",
         data_abertura: abertura,
         capital_social: extractCapitalSocial(cnpjData) || null,
-        porte: extractPorte(cnpjData).includes("EPP")
-          ? "EPP"
-          : extractPorte(cnpjData).includes("ME")
-            ? "ME"
-            : "Demais",
+        porte: mapPorteToLead(extractPorte(cnpjData)),
         cnae_descricao: cnpjData?.cnae_fiscal_descricao ?? null,
         inep_code: row.co_entidade,
         total_matriculas: row.qt_mat_bas,
