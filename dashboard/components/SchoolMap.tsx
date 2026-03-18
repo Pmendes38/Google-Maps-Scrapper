@@ -20,6 +20,14 @@ type SingleMarker = {
   icp?: string | null;
 };
 
+function hasValidCoordinates(lat: number | null | undefined, lng: number | null | undefined): boolean {
+  if (lat === null || lat === undefined || lng === null || lng === undefined) return false;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
+  if (lat === 0 && lng === 0) return false;
+  return true;
+}
+
 export function SchoolMap({
   leads = [],
   height = "500px",
@@ -51,9 +59,10 @@ export function SchoolMap({
         mapRef.current.remove();
       }
 
-      const centerLat = marker?.lat ?? -15.8;
-      const centerLng = marker?.lng ?? -47.9;
-      const initialZoom = zoom ?? (marker ? 15 : 5);
+      const markerValid = hasValidCoordinates(marker?.lat, marker?.lng);
+      const centerLat = markerValid ? (marker?.lat as number) : -15.8;
+      const centerLng = markerValid ? (marker?.lng as number) : -47.9;
+      const initialZoom = zoom ?? (markerValid ? 15 : 5);
 
       const map = L.map(mapNode, {
         center: [centerLat, centerLng],
@@ -64,7 +73,7 @@ export function SchoolMap({
         attribution: '&copy; <a href="https://carto.com">CARTO</a>',
       }).addTo(map);
 
-      if (marker) {
+      if (marker && markerValid) {
         const color = COLORS[marker.icp ?? ""] ?? "#BF00FF";
         L.circleMarker([marker.lat, marker.lng], {
           radius: 10,
@@ -74,19 +83,21 @@ export function SchoolMap({
           fillOpacity: 0.9,
         })
           .bindPopup(
-            `<strong>${marker.name ?? "Escola"}</strong><br/>${marker.city ?? ""}${marker.state ? ` · ${marker.state}` : ""}<br/>Score: <strong>${marker.score ?? "-"}</strong> · ICP: ${marker.icp ?? "-"}`,
+            `<strong>${marker.name ?? "Escola"}</strong><br/>${marker.city ?? ""}${marker.state ? ` | ${marker.state}` : ""}<br/>Score: <strong>${marker.score ?? "-"}</strong> | ICP: ${marker.icp ?? "-"}`,
           )
           .addTo(map);
       } else {
         leads.forEach((lead) => {
           const lat = lead.cep_lat ?? lead.latitude;
           const lng = lead.cep_lng ?? lead.longitude;
-          if (!lat || !lng) return;
+          if (!hasValidCoordinates(lat, lng)) return;
+          const markerLat = lat as number;
+          const markerLng = lng as number;
 
           const color = COLORS[lead.icp_match ?? ""] ?? "#7B5BA5";
           const radius = lead.ai_score ? Math.max(6, lead.ai_score / 12) : 6;
 
-          L.circleMarker([lat, lng], {
+          L.circleMarker([markerLat, markerLng], {
             radius,
             fillColor: color,
             color: "#ffffff",
@@ -94,11 +105,15 @@ export function SchoolMap({
             fillOpacity: 0.82,
           })
             .bindPopup(
-              `<strong>${lead.name}</strong><br/>${lead.city ?? ""} · ${lead.state ?? ""}<br/>Score: <strong>${lead.ai_score ?? "-"}</strong> · ICP: ${lead.icp_match ?? "-"}`,
+              `<strong>${lead.name}</strong><br/>${lead.city ?? ""} | ${lead.state ?? ""}<br/>Score: <strong>${lead.ai_score ?? "-"}</strong> | ICP: ${lead.icp_match ?? "-"}`,
             )
             .addTo(map);
         });
       }
+
+      map.whenReady(() => {
+        setTimeout(() => map.invalidateSize(), 0);
+      });
 
       mapRef.current = map;
     });
@@ -113,4 +128,3 @@ export function SchoolMap({
 
   return <div ref={mapNodeRef} style={{ height, width: "100%", borderRadius: 12 }} />;
 }
-

@@ -63,6 +63,25 @@ function toPainPoints(value: unknown): string[] | null {
   return null;
 }
 
+function toSocios(value: unknown): Array<{ nome: string; qualificacao: string }> | null {
+  if (value === null || value === undefined || value === "") return null;
+  const source = Array.isArray(value) ? value : [];
+  const socios = source
+    .map((item) => {
+      const row = item && typeof item === "object" ? (item as Record<string, unknown>) : {};
+      const nome = String(row.nome ?? row.nome_socio ?? "").trim();
+      const qualificacao = String(row.qualificacao ?? row.qualificacao_socio ?? "").trim();
+      if (!nome && !qualificacao) return null;
+      return {
+        nome: nome || "Nao informado",
+        qualificacao: qualificacao || "Nao informado",
+      };
+    })
+    .filter((item): item is { nome: string; qualificacao: string } => Boolean(item));
+
+  return socios.length > 0 ? socios : null;
+}
+
 function normalizeToken(value: unknown): string {
   return String(value ?? "")
     .normalize("NFD")
@@ -182,6 +201,7 @@ export async function POST(request: NextRequest) {
     porte: toNullableString(body.porte),
     cnae_principal: toNullableString(body.cnae_principal),
     cnae_descricao: toNullableString(body.cnae_descricao),
+    socios: toSocios(body.socios),
     inep_code: toNullableString(body.inep_code),
     total_matriculas: toNullableNumber(body.total_matriculas),
     matriculas_infantil: toNullableNumber(body.matriculas_infantil),
@@ -220,6 +240,31 @@ export async function POST(request: NextRequest) {
   }
 
   const conflict = "place_id";
+
+  const existingKey = String(payload.place_id ?? "").trim();
+  let existing: Record<string, unknown> | null = null;
+  if (existingKey) {
+    const { data } = await supabase.from("school_leads").select("*").eq("place_id", existingKey).maybeSingle();
+    existing = (data as Record<string, unknown> | null) ?? null;
+  }
+
+  // Evita perda de dados em upsert: se o novo payload vier nulo/vazio,
+  // preserva o valor já existente.
+  if (existing) {
+    for (const [key, value] of Object.entries(payload)) {
+      if (key === "name" || key === "city" || key === "state") continue;
+
+      const previous = existing[key];
+      const isNullish = value === null || value === undefined;
+      const isEmptyString = typeof value === "string" && value.trim() === "";
+      const isEmptyArray = Array.isArray(value) && value.length === 0;
+      const shouldPreserve = (isNullish || isEmptyString || isEmptyArray) && previous !== null && previous !== undefined;
+
+      if (shouldPreserve) {
+        payload[key] = previous;
+      }
+    }
+  }
 
   const { data, error } = await supabase
     .from("school_leads")

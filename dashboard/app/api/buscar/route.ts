@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { computeIcpFitScore } from "@/lib/icp-scoring";
 import { getServerSupabaseClient } from "@/lib/supabase-server";
-import type { ICPMatch, SchoolLead, SchoolSegment } from "@/lib/types";
+import type { SchoolLead, SchoolSegment } from "@/lib/types";
 
 type IneqRow = {
   co_entidade: string;
@@ -152,37 +153,6 @@ function buildCitySearchTerms(city: string): string[] {
   return Array.from(terms).filter(Boolean);
 }
 
-function parseNumber(value: unknown): number {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : 0;
-  }
-
-  const raw = String(value ?? "").trim();
-  if (!raw) return 0;
-
-  let text = raw;
-  const hasDot = text.includes(".");
-  const hasComma = text.includes(",");
-
-  if (hasDot && hasComma) {
-    text = text.replace(/\./g, "").replace(",", ".");
-  } else if (hasComma) {
-    text = /,\d{1,2}$/.test(text) ? text.replace(",", ".") : text.replace(/,/g, "");
-  } else if (hasDot && !/\.\d{1,2}$/.test(text)) {
-    text = text.replace(/\./g, "");
-  }
-
-  const n = Number(text);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function yearsSince(dateText: unknown): number {
-  const d = new Date(String(dateText ?? ""));
-  if (Number.isNaN(d.getTime())) return 0;
-  const diff = Date.now() - d.getTime();
-  return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25)));
-}
-
 function cnaeToSegment(cnae: string): SchoolSegment {
   switch (cnae) {
     case "8513900":
@@ -253,7 +223,11 @@ async function fetchCep(cep: string): Promise<CepResponse | null> {
 }
 
 function extractCapitalSocial(data: CompanyData | null): number {
-  return parseNumber(data?.capital_social);
+  const raw = String(data?.capital_social ?? "").trim();
+  if (!raw) return 0;
+  const normalized = raw.replace(/\./g, "").replace(",", ".");
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function extractPorte(data: CompanyData | null): string {
@@ -264,10 +238,6 @@ function extractPorte(data: CompanyData | null): string {
 function extractDataAbertura(data: CompanyData | null): string | null {
   const value = String(data?.data_inicio_atividade ?? data?.abertura ?? "").trim();
   return value || null;
-}
-
-function extractCnaeFiscal(data: CompanyData | null): string {
-  return normalizeDigits(data?.cnae_fiscal);
 }
 
 function extractPhoneDigits(data: CompanyData | null): string {
@@ -285,85 +255,6 @@ function extractWebsite(data: CompanyData | null): string | null {
     .filter(Boolean);
   const found = candidates.find((value) => value.includes("http") || value.includes("www."));
   return found || null;
-}
-
-function getPorteScore(porte: string): number {
-  if (porte === "ME" || porte.includes("MICRO EMPRESA")) return 10;
-  if (porte === "EPP" || porte.includes("EMPRESA DE PEQUENO PORTE")) return 15;
-  if (porte === "DEMAIS") return 20;
-  if (porte.includes("NAO INFORMADO")) return 2;
-  return 2;
-}
-
-function getCapitalSocialScore(capital: number): number {
-  if (capital >= 500000) return 25;
-  if (capital >= 200000) return 18;
-  if (capital >= 50000) return 12;
-  if (capital >= 1) return 5;
-  return 2;
-}
-
-function getYearsScore(years: number): number {
-  if (years < 0) return 2;
-  if (years < 2) return 3;
-  if (years < 5) return 8;
-  if (years <= 15) return 15;
-  return 10;
-}
-
-function getCnaeScore(companyCnae: string, requestedCnae: string): number {
-  if (companyCnae && companyCnae === requestedCnae) return 25;
-  if (companyCnae.startsWith("85")) return 12;
-  return 0;
-}
-
-function getMatriculasScore(totalMatriculas: number | null): number {
-  const total = Number(totalMatriculas ?? 0);
-  if (total >= 1000) return 25;
-  if (total >= 500) return 18;
-  if (total >= 100) return 10;
-  if (total >= 1) return 3;
-  return 0;
-}
-
-function scoreHeuristic(
-  data: CompanyData | null,
-  requestedCnae: string,
-  totalMatriculas: number | null,
-): { score: number; icp: ICPMatch } {
-  let score = 0;
-
-  const capital = extractCapitalSocial(data);
-  score += getCapitalSocialScore(capital);
-
-  const porte = extractPorte(data);
-  score += getPorteScore(porte);
-
-  const cnae = extractCnaeFiscal(data);
-  score += getCnaeScore(cnae, requestedCnae);
-
-  const abertura = extractDataAbertura(data);
-  const years = abertura ? yearsSince(abertura) : -1;
-  score += getYearsScore(years);
-
-  const phone = extractPhoneDigits(data);
-  if (phone) score += 15;
-
-  score += getMatriculasScore(totalMatriculas);
-  score = Math.min(100, score);
-
-  const icp: ICPMatch = score >= 65 ? "alto" : score >= 40 ? "medio" : "baixo";
-  return { score, icp };
-}
-
-function suggestedApproach(score: number): string {
-  if (score >= 65) {
-    return "Escola com porte e estrutura para investir em processo comercial. Abordagem direta ao diretor sobre captacao de alunos.";
-  }
-  if (score >= 40) {
-    return "Escola em crescimento com potencial. Apresentar case de resultado e proposta de diagnostico gratuito.";
-  }
-  return "Escola menor ou com dados incompletos. Qualificar por telefone antes de proposta formal.";
 }
 
 function isPrivateFromTpRede(tpRede: number | null): "Sim" | "Nao" | "Indefinido" {
@@ -675,12 +566,21 @@ export async function POST(request: NextRequest) {
       );
       const cep = normalizeDigits(companyData?.cep);
       const cepData = await fetchCep(cep);
-      const score = scoreHeuristic(companyData, cnae, candidate.inepRow?.qt_mat_bas ?? null);
-
       const phoneDigits = extractPhoneDigits(companyData);
       const phoneFormatted = phoneDigits ? `+55${phoneDigits}` : null;
       const website = extractWebsite(companyData);
       const abertura = extractDataAbertura(companyData);
+      const score = computeIcpFitScore({
+        schoolSegment: cnaeToSegment(cnae),
+        isPrivate: isPrivateFromTpRede(candidate.inepRow?.tp_rede ?? null) === "Sim",
+        totalMatriculas: candidate.inepRow?.qt_mat_bas ?? null,
+        matriculasInfantil: candidate.inepRow?.qt_mat_inf ?? null,
+        matriculasFundamental: candidate.inepRow?.qt_mat_fund ?? null,
+        matriculasMedio: candidate.inepRow?.qt_mat_med ?? null,
+        hasPhone: Boolean(phoneDigits),
+        hasAddressOrWebsite: Boolean(companyData?.logradouro || website),
+        estimatedRevenue: (candidate.inepRow?.qt_mat_bas ?? 0) * 700,
+      });
 
       const lead: SchoolLead = {
         id: String(candidate.inepRow?.co_entidade ?? cnpj ?? crypto.randomUUID()),
@@ -724,11 +624,11 @@ export async function POST(request: NextRequest) {
         total_matriculas: candidate.inepRow?.qt_mat_bas ?? null,
         ideb_af: candidate.inepRow?.nu_ideb_af ?? null,
         ai_score: score.score,
-        icp_match: score.icp,
-        pain_points: null,
-        abordagem_sugerida: suggestedApproach(score.score),
-        prioridade: score.score >= 60 ? "imediata" : score.score >= 35 ? "normal" : "baixa",
-        justificativa_score: `Score heuristico multi-fonte (${score.score} pts).`,
+        icp_match: score.icpMatch,
+        pain_points: score.painPoints,
+        abordagem_sugerida: score.abordagem,
+        prioridade: score.prioridade,
+        justificativa_score: score.justificativa,
         pipeline_stage: "Novo",
         owner: null,
         notes: null,

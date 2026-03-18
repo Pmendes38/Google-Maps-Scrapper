@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import { NextRequest, NextResponse } from "next/server";
 
+import { computeIcpFitScore } from "@/lib/icp-scoring";
 import { getServerSupabaseClient } from "@/lib/supabase-server";
 import type { EscolaProfile, EscolaSocio } from "@/lib/types";
 
@@ -23,6 +24,15 @@ type BrasilApiCnpj = {
   municipio?: string;
   uf?: string;
   qsa?: Array<{ nome_socio?: string; qualificacao_socio?: string }>;
+};
+
+type CompanyProfile = BrasilApiCnpj & {
+  socios?: Array<{ nome?: string; qualificacao?: string; nome_socio?: string; qualificacao_socio?: string }>;
+  ddd_telefone_1?: string;
+  telefone_1?: string;
+  site?: string;
+  website?: string;
+  endereco?: string;
 };
 
 type CepResponse = {
@@ -108,7 +118,7 @@ type QEduCacheRow = {
 const CNPJ_CACHE_TTL_MS = 10 * 60 * 1000;
 const QEDU_TIMEOUT_MS = 9000;
 const QEDU_BASE_URL = (process.env.QEDU_API_BASE_URL?.trim() || "http://api.qedu.org.br/v1").replace(/\/+$/, "");
-const cnpjCache = new Map<string, { expiresAt: number; data: BrasilApiCnpj | null }>();
+const cnpjCache = new Map<string, { expiresAt: number; data: CompanyProfile | null }>();
 
 function normalizeDigits(value: unknown): string {
   return String(value ?? "").replace(/\D/g, "");
@@ -221,15 +231,28 @@ function normalizeEtapas(value: unknown): string[] {
     .filter(Boolean);
 }
 
-function normalizeSocios(cnpjData: BrasilApiCnpj | null): EscolaSocio[] {
-  if (!cnpjData?.qsa || !Array.isArray(cnpjData.qsa)) return [];
+function normalizeSocios(cnpjData: CompanyProfile | null, fallback: unknown): EscolaSocio[] {
+  const source = Array.isArray(cnpjData?.qsa)
+    ? cnpjData?.qsa
+    : Array.isArray(cnpjData?.socios)
+      ? cnpjData?.socios
+      : Array.isArray(fallback)
+        ? fallback
+        : [];
 
-  return cnpjData.qsa
-    .slice(0, 3)
-    .map((partner) => ({
-      nome: String(partner.nome_socio ?? "").trim() || "Nao informado",
-      qualificacao: String(partner.qualificacao_socio ?? "").trim() || "Nao informado",
-    }));
+  return source
+    .map((partner) => {
+      const row = partner && typeof partner === "object" ? (partner as Record<string, unknown>) : {};
+      const nome = String(row.nome ?? row.nome_socio ?? "").trim();
+      const qualificacao = String(row.qualificacao ?? row.qualificacao_socio ?? "").trim();
+      if (!nome && !qualificacao) return null;
+      return {
+        nome: nome || "Nao informado",
+        qualificacao: qualificacao || "Nao informado",
+      };
+    })
+    .filter((item): item is EscolaSocio => Boolean(item))
+    .slice(0, 5);
 }
 
 function inferSegmentFromInep(row: IneqRow | null): string {
@@ -245,6 +268,34 @@ function inferIsPrivateFromTpRede(tpRede: number | null): string {
   if (tpRede === 4) return "Sim";
   if (tpRede === 1 || tpRede === 2 || tpRede === 3) return "Nao";
   return "Indefinido";
+}
+
+function isValidCoordinate(value: number | null, min: number, max: number): boolean {
+  if (value === null || !Number.isFinite(value)) return false;
+  return value >= min && value <= max;
+}
+
+function isValidLatLng(lat: number | null, lng: number | null): boolean {
+  return isValidCoordinate(lat, -90, 90) && isValidCoordinate(lng, -180, 180) && !(lat === 0 && lng === 0);
+}
+
+function normalizePhone(value: unknown): string {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
+function parseCapitalSocial(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  let raw = String(value).trim();
+  if (!raw) return null;
+  const hasDot = raw.includes(".");
+  const hasComma = raw.includes(",");
+  if (hasDot && hasComma) {
+    raw = raw.replace(/\./g, "").replace(",", ".");
+  } else if (hasComma) {
+    raw = raw.replace(",", ".");
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function tpRedeToDependencia(tpRede: number | null): string | null {
@@ -396,7 +447,7 @@ async function fetchEducacaoInep(inepCode: string): Promise<AnyObject | null> {
   return null;
 }
 
-async function fetchBrasilApiCnpj(cnpj: string): Promise<BrasilApiCnpj | null> {
+async function fetchBrasilApiCnpj(cnpj: string): Promise<CompanyProfile | null> {
   const now = Date.now();
   const cached = cnpjCache.get(cnpj);
   if (cached && cached.expiresAt > now) {
@@ -410,7 +461,7 @@ async function fetchBrasilApiCnpj(cnpj: string): Promise<BrasilApiCnpj | null> {
       return null;
     }
 
-    const payload = (await response.json()) as BrasilApiCnpj;
+    const payload = (await response.json()) as CompanyProfile;
     cnpjCache.set(cnpj, { expiresAt: now + CNPJ_CACHE_TTL_MS, data: payload });
     return payload;
   } catch {
@@ -430,6 +481,81 @@ async function fetchBrasilApiCep(cep: string): Promise<CepResponse | null> {
   } catch {
     return null;
   }
+}
+
+async function fetchOpenCnpj(cnpj: string): Promise<AnyObject | null> {
+  try {
+    const response = await fetch(`https://api.opencnpj.org/${cnpj}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    return toRecord(await response.json());
+  } catch {
+    return null;
+  }
+}
+
+function mergeCompanyData(
+  primary: CompanyProfile | null,
+  fallback: AnyObject | null,
+  lead: AnyObject | null,
+): CompanyProfile | null {
+  if (!primary && !fallback && !lead) return null;
+  const fb = fallback ?? {};
+
+  const fallbackQsa = Array.isArray(fb.qsa)
+    ? fb.qsa
+    : Array.isArray(fb.socios)
+      ? fb.socios
+      : Array.isArray(fb.quadro_societario)
+        ? fb.quadro_societario
+        : [];
+
+  const merged: CompanyProfile = {
+    ...(primary ?? {}),
+    cnpj:
+      String(primary?.cnpj ?? fb.cnpj ?? lead?.cnpj ?? "").trim() ||
+      undefined,
+    razao_social:
+      String(primary?.razao_social ?? fb.razao_social ?? fb.razaoSocial ?? lead?.razao_social ?? "").trim() ||
+      undefined,
+    nome_fantasia:
+      String(primary?.nome_fantasia ?? fb.nome_fantasia ?? fb.nomeFantasia ?? lead?.name ?? "").trim() || undefined,
+    cep: String(primary?.cep ?? fb.cep ?? lead?.cep ?? "").trim() || undefined,
+    email: String(primary?.email ?? fb.email ?? lead?.email ?? "").trim() || undefined,
+    porte:
+      String(primary?.porte ?? primary?.descricao_porte ?? fb.porte ?? fb.descricao_porte ?? lead?.porte ?? "").trim() ||
+      undefined,
+    capital_social:
+      parseCapitalSocial(primary?.capital_social ?? fb.capital_social ?? fb.capitalSocial ?? lead?.capital_social) ??
+      undefined,
+    data_inicio_atividade:
+      String(primary?.data_inicio_atividade ?? fb.data_inicio_atividade ?? fb.abertura ?? lead?.data_abertura ?? "").trim() ||
+      undefined,
+    situacao_cadastral:
+      String(
+        primary?.situacao_cadastral ??
+          primary?.descricao_situacao_cadastral ??
+          fb.situacao_cadastral ??
+          fb.descricao_situacao_cadastral ??
+          lead?.situacao_cadastral ??
+          "",
+      ).trim() || undefined,
+    logradouro:
+      String(primary?.logradouro ?? fb.logradouro ?? fb.endereco ?? lead?.address ?? "").trim() || undefined,
+    bairro: String(primary?.bairro ?? fb.bairro ?? lead?.bairro ?? "").trim() || undefined,
+    municipio: String(primary?.municipio ?? fb.municipio ?? lead?.city ?? "").trim() || undefined,
+    uf: String(primary?.uf ?? fb.uf ?? lead?.state ?? "").trim() || undefined,
+    ddd_telefone_1:
+      String(primary?.ddd_telefone_1 ?? fb.ddd_telefone_1 ?? fb.ddd ?? "").trim() || undefined,
+    telefone_1:
+      String(primary?.telefone_1 ?? fb.telefone_1 ?? fb.telefone ?? "").trim() || undefined,
+    qsa: Array.isArray(primary?.qsa) && primary.qsa.length > 0 ? primary.qsa : (fallbackQsa as BrasilApiCnpj["qsa"]),
+    socios: Array.isArray(fb.socios) ? (fb.socios as CompanyProfile["socios"]) : undefined,
+    site: String(primary?.site ?? fb.site ?? lead?.website ?? "").trim() || undefined,
+    website: String(primary?.website ?? fb.website ?? lead?.website ?? "").trim() || undefined,
+    endereco: String((fb as AnyObject).endereco ?? "").trim() || undefined,
+  };
+
+  return merged;
 }
 
 async function fetchQEduSyncData(inepCode: string, token: string): Promise<QEduSyncData | null> {
@@ -528,13 +654,13 @@ async function readQEduCache(
 ): Promise<QEduCacheRow | null> {
   if (!supabase || !inepCode) return null;
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("school_qedu_profiles")
     .select("*")
     .eq("inep_code", inepCode)
     .maybeSingle();
 
-  if (!data) return null;
+  if (error || !data) return null;
 
   const row = toRecord(data);
   return {
@@ -807,7 +933,9 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
   const qeduEtapas = qedu?.etapasEnsino ?? inferEtapasFromQEduCenso(qeduCenso);
 
   const educacaoData = inepCode ? await fetchEducacaoInep(inepCode) : null;
-  const cnpjData = cnpjDigits.length === 14 ? await fetchBrasilApiCnpj(cnpjDigits) : null;
+  const cnpjPrimary = cnpjDigits.length === 14 ? await fetchBrasilApiCnpj(cnpjDigits) : null;
+  const cnpjFallback = !cnpjPrimary && cnpjDigits.length === 14 ? await fetchOpenCnpj(cnpjDigits) : null;
+  const cnpjData = mergeCompanyData(cnpjPrimary, cnpjFallback, lead);
   const cepDigits = normalizeDigits(
     lead?.cep ?? cnpjData?.cep ?? qeduSchool?.cep ?? pickString(educacaoData, ["cep", "endereco.cep"]),
   );
@@ -816,19 +944,22 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
   const dataAbertura =
     String(cnpjData?.data_inicio_atividade ?? lead?.data_abertura ?? "").trim() || null;
 
-  const lat =
+  const rawLat =
     toNullableNumber(lead?.latitude) ??
     toNullableNumber(lead?.cep_lat) ??
     toNullableNumber(qeduSchool?.lat) ??
     pickNumber(educacaoData, ["latitude", "lat", "coordenadas.latitude", "gps.latitude"]) ??
     toNullableNumber(cepData?.location?.coordinates?.latitude);
 
-  const lng =
+  const rawLng =
     toNullableNumber(lead?.longitude) ??
     toNullableNumber(lead?.cep_lng) ??
     toNullableNumber(qeduSchool?.long) ??
     pickNumber(educacaoData, ["longitude", "lng", "coordenadas.longitude", "gps.longitude"]) ??
     toNullableNumber(cepData?.location?.coordinates?.longitude);
+
+  const lat = isValidLatLng(rawLat, rawLng) ? rawLat : null;
+  const lng = isValidLatLng(rawLat, rawLng) ? rawLng : null;
 
   const infraNode = toRecord(pickFirst(educacaoData, ["infraestrutura", "dados_infraestrutura", "infra"]));
 
@@ -864,12 +995,16 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     phone_formatted:
       String(lead?.phone_formatted ?? "").trim() ||
       (() => {
-        const ddd = String(qeduSchool?.ddd ?? "").trim();
-        const phone = normalizeDigits(qeduSchool?.telefone);
-        if (!ddd || !phone) return null;
-        return `+55${ddd}${phone}`;
+        const ddd = String(qeduSchool?.ddd ?? cnpjData?.ddd_telefone_1 ?? "").trim();
+        const qeduPhone = normalizePhone(qeduSchool?.telefone);
+        const cnpjPhone = normalizePhone(cnpjData?.telefone_1);
+        const phone = qeduPhone || cnpjPhone;
+        if (ddd && phone) return `+55${ddd}${phone}`;
+        const localPhone = normalizePhone(lead?.phone_number);
+        if (localPhone.length >= 10) return `+55${localPhone}`;
+        return null;
       })(),
-    website: String(lead?.website ?? "").trim() || null,
+    website: String(lead?.website ?? cnpjData?.site ?? cnpjData?.website ?? "").trim() || null,
     email: String(lead?.email ?? cnpjData?.email ?? qeduSchool?.email ?? "").trim() || null,
     address:
       String(
@@ -995,12 +1130,12 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
       pickBoolean(infraNode, ["banheiro", "temBanheiro", "in_banheiro"]),
     qtd_salas_aula: pickNumber(educacaoData, ["qtdSalasAula", "salasAula", "salas_aula"]),
     razao_social: String(cnpjData?.razao_social ?? lead?.razao_social ?? "").trim() || null,
-    capital_social: toNullableNumber(cnpjData?.capital_social) ?? toNullableNumber(lead?.capital_social),
+    capital_social: parseCapitalSocial(cnpjData?.capital_social) ?? toNullableNumber(lead?.capital_social),
     porte:
       String(cnpjData?.porte ?? cnpjData?.descricao_porte ?? lead?.porte ?? "").trim() || null,
     data_abertura: dataAbertura,
     anos_operacao: yearsSince(dataAbertura),
-    socios: normalizeSocios(cnpjData),
+    socios: normalizeSocios(cnpjData, lead?.socios),
     situacao_cadastral:
       String(
         cnpjData?.descricao_situacao_cadastral ??
@@ -1009,6 +1144,28 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
           "",
       ).trim() || null,
   };
+
+  const computedIcp = computeIcpFitScore({
+    schoolSegment: profile.school_segment,
+    isPrivate: profile.is_private === "Sim",
+    totalMatriculas: profile.total_matriculas,
+    matriculasInfantil:
+      toNullableNumber(inepFallback?.qt_mat_inf) ?? toNullableNumber(qeduCenso?.matriculas_pre_escolar),
+    matriculasFundamental:
+      toNullableNumber(inepFallback?.qt_mat_fund) ??
+      ((toNullableNumber(qeduCenso?.matriculas_anos_iniciais) ?? 0) +
+        (toNullableNumber(qeduCenso?.matriculas_anos_finais) ?? 0)),
+    matriculasMedio:
+      toNullableNumber(inepFallback?.qt_mat_med) ?? toNullableNumber(qeduCenso?.matriculas_ensino_medio),
+    hasPhone: Boolean(profile.phone_formatted),
+    hasAddressOrWebsite: Boolean(profile.address || profile.website),
+    estimatedRevenue: (profile.total_matriculas ?? 0) * 700,
+  });
+
+  profile.ai_score = computedIcp.score;
+  profile.icp_match = computedIcp.icpMatch;
+  if (!profile.abordagem_sugerida) profile.abordagem_sugerida = computedIcp.abordagem;
+  if (!profile.pain_points || profile.pain_points.length === 0) profile.pain_points = computedIcp.painPoints;
 
   return NextResponse.json(profile);
 }

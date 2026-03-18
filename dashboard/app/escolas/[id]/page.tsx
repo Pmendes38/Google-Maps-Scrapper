@@ -300,22 +300,28 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
           razao_social: profile.razao_social,
           school_segment: profile.school_segment,
           is_private: profile.is_private,
+          phone_number: profile.phone_formatted,
           phone_formatted: profile.phone_formatted,
           website: profile.website,
           email: profile.email,
           address: profile.address,
           bairro: profile.bairro,
           cep: profile.cep,
+          latitude: profile.lat,
+          longitude: profile.lng,
+          cep_lat: profile.lat,
+          cep_lng: profile.lng,
           capital_social: profile.capital_social,
           porte: profile.porte,
           data_abertura: profile.data_abertura,
+          socios: profile.socios,
           total_matriculas: profile.total_matriculas,
           ideb_af: profile.ideb_af,
           ai_score: profile.ai_score,
           icp_match: profile.icp_match,
           pain_points: profile.pain_points,
           abordagem_sugerida: profile.abordagem_sugerida,
-          source: "inep_censo",
+          source: profile.qedu_status === "live" ? "qedu_api" : "inep_censo",
         }),
       });
 
@@ -377,8 +383,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
     profile.taxa_reprovacao !== null ||
     profile.taxa_abandono !== null;
 
-  const hasCnpj = Boolean(profile.cnpj);
-  const hasMap = profile.lat !== null && profile.lng !== null;
+  const hasMap = profile.lat !== null && profile.lng !== null && !(profile.lat === 0 && profile.lng === 0);
   const scorePct = scorePercent(profile.ai_score);
 
   const infrastructureItems = [
@@ -597,8 +602,7 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
           </div>
         </section>
 
-        {hasCnpj && (
-          <section className="rounded-xl border border-white/15 bg-[#130a1d] p-5">
+        <section className="rounded-xl border border-white/15 bg-[#130a1d] p-5">
             <div className="mb-4 flex items-end justify-between gap-3">
               <h2 className="font-[var(--font-outfit)] text-lg font-semibold">Dados Empresariais</h2>
               <span className="text-xs text-white/45">Fonte: Receita Federal</span>
@@ -643,6 +647,40 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
             </div>
 
             <div className="mt-4">
+              <p className="text-sm text-white/60">Contato</p>
+              <div className="mt-2 grid gap-2 text-sm md:grid-cols-2">
+                <p>
+                  <span className="text-white/55">Telefone: </span>
+                  <strong>{profile.phone_formatted ?? "Nao informado"}</strong>
+                </p>
+                <p>
+                  <span className="text-white/55">Email: </span>
+                  <strong>{profile.email ?? "Nao informado"}</strong>
+                </p>
+                <p className="md:col-span-2">
+                  <span className="text-white/55">Site: </span>
+                  <strong>{profile.website ?? "Nao informado"}</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <p className="text-sm text-white/60">Localizacao</p>
+              <div className="mt-2 grid gap-2 text-sm">
+                <p>
+                  <span className="text-white/55">Endereco: </span>
+                  <strong>
+                    {[profile.address, profile.bairro, profile.city, profile.state].filter(Boolean).join(", ") || "Nao informado"}
+                  </strong>
+                </p>
+                <p>
+                  <span className="text-white/55">CEP: </span>
+                  <strong>{profile.cep ?? "Nao informado"}</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4">
               <p className="text-sm text-white/60">Socios</p>
               <div className="mt-2 flex flex-col gap-2">
                 {profile.socios.length === 0 && <p className="text-sm text-white/55">Nao informado</p>}
@@ -655,7 +693,6 @@ export default function EscolaPage({ params }: { params: { id: string } }) {
               </div>
             </div>
           </section>
-        )}
 
         <section className="rounded-xl border border-[#BF00FF]/30 bg-[rgba(191,0,255,0.08)] p-5">
           <h2 className="font-[var(--font-outfit)] text-xl font-semibold text-[#BF00FF]">Analise Wayzen</h2>

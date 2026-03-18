@@ -58,6 +58,7 @@ export interface SchoolLead {
   capital_social: number | null;
   porte: "ME" | "EPP" | "Demais" | null;
   cnae_descricao: string | null;
+  socios?: EscolaSocio[] | null;
   inep_code: string | null;
   total_matriculas: number | null;
   ideb_af: number | null;
