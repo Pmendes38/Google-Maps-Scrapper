@@ -479,14 +479,9 @@ export async function POST(request: NextRequest) {
   }
 
   const cityTerms = buildCitySearchTerms(cidade);
-  const cityLikeTerm =
-    cityTerms
-      .map((term) => normalizeText(term))
-      .filter(Boolean)
-      .map((term) => term.split(/\s+/).find(Boolean) ?? "")
-      .find((term) => term.length >= 4)
-      ?.slice(0, 12) ?? String(cidade).trim();
-  let inepQuery = supabase.from("inep_schools").select("*").eq("sg_uf", estado).limit(1500);
+  const cityLikeRoot = normalizeText(cidade).split(/\s+/).find(Boolean) ?? "";
+  const cityLikeTerm = cityLikeRoot.length >= 3 ? cityLikeRoot.slice(0, 3) : String(cidade).trim();
+  let inepQuery = supabase.from("inep_schools").select("*").eq("sg_uf", estado).limit(5000);
 
   if (cityLikeTerm) {
     inepQuery = inepQuery.ilike("no_municipio", `%${escapeIlikeValue(cityLikeTerm)}%`);
