@@ -20,3 +20,4 @@ check_result.txt
 supabase_check_output.json
 .migrations_applied
 dashboard/build_log.txt
+.vercel
